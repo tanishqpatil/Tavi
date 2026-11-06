@@ -4,7 +4,7 @@
 
 An Android app for local AI conversations with text, photos, and voice. Initial model integration focuses on Liquid AI's LFM3 family.
 
-Built with Kotlin, Jetpack Compose and an embedded C++ runtime. No account or cloud inference. **Early development:** the text path is emulator-tested; multimodal integration and phone qualification are ongoing.
+Built with Kotlin, Jetpack Compose and an embedded llama.cpp/libmtmd runtime. No account or cloud inference. **Early development:** text is emulator-tested; photo, microphone and speech paths are experimental and require phone testing.
 
 ## Try it
 
@@ -19,13 +19,35 @@ Total device RAM alone does not establish compatibility. No physical-phone perfo
 
 The Kotlin/Compose interface includes Chat, session History, Models, and Settings; light/dark/system themes; reduced motion; and an optional developer panel. The Tavi logo is generated artwork and is included as the app's launcher icon.
 
-The app now includes an experimental ARM64 CPU adapter for LFM3 Text 1.7B using pinned llama.cpp v0.8.0. Models offers a verified, resumable 1.10 GB Q4_K_M download, followed by explicit load/unload controls. Keep the app open during downloads; they pause when it goes into the background. Complete files are SHA-256 checked before activation and rechecked before loading.
+Models offers resumable, immutable downloads for the following official packs. All required components and the model license must pass SHA-256 verification before activation; files are rechecked at startup and before load. Keep Tavi open during downloads; backgrounding pauses them. Unload the active model before selecting another pack.
 
-Text uses a 1,024-token context with up to 128 output tokens and greedy sampling for this first correctness experiment. Completed text turns are replayed with the model's chat template; context overflow is rejected visibly. The developer panel reports exact output-token counts and decode rate. Weights are memory-mapped, with an active native context; Android controls page residency.
+| Pack | Approximate download | Intended capabilities | Validation |
+| --- | --- | --- | --- |
+| LFM3 Text 1.7B | 1.10 GB | Text | Real-model emulator regression passed |
+| LFM3 VL 2B | 1.30 GB | Text + photo | Experimental, phone test pending |
+| LFM3 Audio 2B | 1.40 GB | Text + voice input + generated speech | Experimental, phone test pending |
+| LFM3 Omni 2B | 1.61 GB | Text + photo + voice + speech | Experimental, phone test pending |
+
+Each pack uses its own Q4_K_M language weights, matching Q8_0 multimodal component where required, and pinned license. Equal file sizes do not mean weights can be shared. Downloads exclude compilation/runtime overhead and are not RAM estimates.
+
+**Settings → Generation** offers 1,024 / 2,048 / 4,096 / 8,192 context tokens and output caps from 64 to 2,048 tokens, limited to half the selected context. Context changes require unloading and reloading the model; output changes apply to the next turn. Defaults remain 1,024 / 128. Larger settings are not qualified across device tiers. Greedy text sampling is used for repeatability. Context overflow is rejected visibly. The developer panel reports exact LM output-token counts and decode speed; audio frames are not counted as text tokens. Weights are memory-mapped; Android controls page residency.
+
+Model-provided `<think>…</think>` sections appear in collapsed disclosures with lighter typography. Partial streaming tags are handled without displaying tag fragments. Tavi does not invent a thought trace when the model does not emit one.
 
 Verified on the ARM64 API 36 emulator: in-app download with pause/restart/resume, full checksums, offline text/follow-up/cancellation recovery/unload/reload, and a real response through the chat UI. This is experimental text-path evidence; it does not qualify photo/voice or physical-device performance.
 
-The separate interface preview remains available without a model. Persistent conversation storage, camera capture, photo inference and voice input/output are still being integrated. Omni/VL/Audio downloads remain disabled until their multimodal adapters pass validation. No physical-device support or real-time performance is claimed.
+The separate interface preview remains available without a model. Persistent conversation storage remains unfinished: chat and media history are session-only, and private session media is cleared when a new app process initializes. No physical-device tier, speech quality or real-time performance is qualified yet. Native inference currently runs in the app process, so a native failure may close the app.
+
+## Experimental phone testing
+
+For media tests, consider a 4,096-token context and a 256-token output cap as a starting experiment, then reload. This is not a memory/performance guarantee. Short recordings and a single photo are easier to diagnose first.
+
+1. **VL:** select/download/load the vision pack. Use the photo button to choose an image or take a photo through the system camera app. Add a question and send.
+2. **Audio:** select/download/load the audio pack. Grant microphone permission, tap to record, then tap again to finish. Press Send. Recording is capped at 30 seconds and stops on backgrounding. Voice input initially enables the **Speak** chip; turn it off before sending if you want text only.
+3. **Omni:** attach a photo, record a question about it, and send both in the same turn. The matching model component handles both inputs.
+4. **Speech output:** enable **Speak** on an Audio/Omni pack for generated audio. Playback uses bounded blocking writes with no unbounded PCM queue; output also stops at context/output or 30-second audio limits. Stop/backgrounding interrupts generation and flushes playback.
+
+Photos are normalized to a maximum 1,024-pixel edge with orientation handling; audio is recorded as 16 kHz mono WAV. Required media references are replayed in follow-ups rather than replaced with captions. Sessions allow up to eight media attachments; start a new chat when context is full. Audio routing, interruption handling, latency, codec quality and same-turn photo/voice correctness still need physical-device validation.
 
 Tavi is the project owner's selected name. Other products use this name; no trademark clearance or vendor endorsement is claimed. The technical development application ID remains `app.lfm3.probe` to preserve existing installs.
 
@@ -48,7 +70,7 @@ Debug APK: `app/build/outputs/apk/debug/app-debug.apk`.
 
 UI code is under `app/src/main/java/app/lfm3/probe/ui/`. The engine contract and adapter are under `inference/`; chat state is under `presentation/`. Theme, developer visibility, and reduced-motion preferences are stored privately on the device. Conversation content stays in memory; operational diagnostics exclude conversation payloads.
 
-llama.cpp revision: `8642541b255bfb5dc39cd351a178be09013a55d6` (MIT; notice included in app assets). Model revision: `cd0c74c575b5c416f3011b5b4c298077f26ca8c2`. Model terms are linked in the download confirmation and included in the verified pack.
+llama.cpp revision: `8642541b255bfb5dc39cd351a178be09013a55d6` (MIT; native media notices included in app assets). Exact model revisions, sizes and checksums are in `ModelCatalog.kt` and `VerifiedArtifact.kt`. Model terms are linked in the download confirmation and included in each verified pack.
 
 Real-model tests require installing the text pack through the app first. They are opt-in and do not download weights in CI:
 

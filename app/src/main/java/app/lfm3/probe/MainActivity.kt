@@ -24,6 +24,7 @@ class MainActivity : ComponentActivity() {
             var theme by remember { mutableStateOf(preferences.theme) }
             var developer by remember { mutableStateOf(preferences.developer) }
             var reduceMotion by remember { mutableStateOf(preferences.reduceMotion) }
+            var limits by remember { mutableStateOf(preferences.limits) }
             val dark = theme == ThemeChoice.DARK || (theme == ThemeChoice.SYSTEM && isSystemInDarkTheme())
             DisposableEffect(dark) {
                 val bars = if (dark) SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
@@ -32,10 +33,11 @@ class MainActivity : ComponentActivity() {
                 onDispose { }
             }
             TaviTheme(theme) {
-                TaviApp(theme, developer, reduceMotion,
+                TaviApp(theme, developer, reduceMotion, limits,
                     onTheme = { theme = it; preferences.theme = it },
                     onDeveloper = { developer = it; preferences.developer = it },
                     onReduceMotion = { reduceMotion = it; preferences.reduceMotion = it },
+                    onLimits = { limits = it; preferences.limits = it },
                 )
             }
         }

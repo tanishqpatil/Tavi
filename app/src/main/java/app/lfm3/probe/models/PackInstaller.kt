@@ -8,30 +8,33 @@ import java.net.URL
 import javax.net.ssl.HttpsURLConnection
 
 /** Foreground-only P1 installer. Interrupted transfers retain immutable partial files for retry. */
-class PackInstaller(private val root: File, private val log: (String) -> Unit = {}) {
+class PackInstaller(private val root: File, private val log: (String) -> Unit = {}, val pack: ModelPack = ModelCatalog.text) {
     @Volatile private var connection: HttpsURLConnection? = null
-    val installed = File(root, "text-${TextPack.revision}")
-    private val staging = File(root, "text-${TextPack.revision}.staging")
+    val installed = File(root, pack.directory)
+    private val staging = File(root, "${pack.directory}.staging")
     fun interrupt() { connection?.disconnect() }
 
     fun verifyInstalled(): Boolean = installed.isDirectory && runCatching {
-        TextPack.artifacts.forEach { it.verify(File(installed, it.name)) }
+        pack.artifacts.forEach { it.verify(File(installed, it.name)) }
     }.isSuccess
 
     suspend fun install(progress: (Long, Long) -> Unit) {
         root.mkdirs(); staging.mkdirs()
-        val remaining = TextPack.artifacts.sumOf { (it.bytes - File(staging, it.name).length()).coerceAtLeast(0) }
+        val remaining = pack.artifacts.sumOf { (it.bytes - File(staging, it.name).length()).coerceAtLeast(0) }
         check(root.usableSpace >= remaining + 64L * 1024 * 1024) { "Not enough free storage for this model." }
-        for (artifact in TextPack.artifacts) {
+        var completedBytes = 0L
+        for (artifact in pack.artifacts) {
             currentCoroutineContext().ensureActive()
             val file = File(staging, artifact.name)
             if (file.length() > artifact.bytes) check(file.delete())
             if (file.length() < artifact.bytes) download(artifact, file) { count, total ->
-                if (artifact == TextPack.weights) progress(count, total)
+                progress(completedBytes + count, pack.bytes)
             }
             currentCoroutineContext().ensureActive()
             try { artifact.verify(file) } catch (e: Exception) { file.delete(); throw e }
             log("ARTIFACT_SHA256_VERIFIED")
+            completedBytes += artifact.bytes
+            progress(completedBytes, pack.bytes)
         }
         currentCoroutineContext().ensureActive()
         // Same-filesystem directory rename publishes only a complete, verified component set.

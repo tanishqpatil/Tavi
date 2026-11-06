@@ -27,9 +27,11 @@ data class InferenceRequest(
     val parts: List<RequestPart>,
     val history: List<ChatMessage> = emptyList(),
     val generationTicket: Long = 0,
+    val outputLimit: Int = 128,
+    val speakResponse: Boolean = false,
 )
 
-data class ChatMessage(val role: String, val text: String)
+data class ChatMessage(val role: String, val text: String, val media: List<RequestPart> = emptyList())
 
 sealed interface RequestPart {
     data class Text(val value: String) : RequestPart

@@ -24,12 +24,12 @@ class Lfm3DeviceTest {
         NativeLlama.info()
         val engine = LlamaEngine()
         try {
-            engine.load(File(pack.installed, TextPack.weights.name).absolutePath)
+            engine.load(File(pack.installed, TextPack.weights.name).absolutePath, contextTokens = 2048)
             val output = StringBuilder()
             var stats: InferenceEvent.Usage? = null
             val ticket1 = engine.prepare()
             withTimeout(180_000) {
-                engine.generate(InferenceRequest(1, listOf(RequestPart.Text("Reply with only the word hello.")), generationTicket = ticket1)) {
+                engine.generate(InferenceRequest(1, listOf(RequestPart.Text("Reply with only the word hello.")), generationTicket = ticket1, outputLimit = 64)) {
                     if (it is InferenceEvent.TextDelta) output.append(it.value)
                     if (it is InferenceEvent.Usage) stats = it
                 }
@@ -37,6 +37,7 @@ class Lfm3DeviceTest {
             assertTrue("Expected a grounded short response.", output.toString().lowercase().contains("hello"))
             val measured = requireNotNull(stats)
             assertTrue(measured.outputTokens > 0 && measured.decodeNanos > 0)
+            assertTrue(measured.outputTokens <= 64)
             Log.i("TaviDeviceTest", "TEXT_OK tokens=${measured.outputTokens} decodeNanos=${measured.decodeNanos}")
             output.clear()
             val ticket2 = engine.prepare()

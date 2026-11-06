@@ -4,5 +4,6 @@ import android.app.Application
 import app.lfm3.probe.models.RuntimeManager
 
 class TaviApplication : Application() {
-    val runtime by lazy { RuntimeManager(this) }
+    val media by lazy { app.lfm3.probe.media.MediaStore(this) }
+    val runtime by lazy { RuntimeManager(this, media) }
 }
