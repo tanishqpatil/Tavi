@@ -1,5 +1,7 @@
 # Tavi
 
+[![Android build](https://github.com/tanishqpatil/Tavi/actions/workflows/android.yml/badge.svg)](https://github.com/tanishqpatil/Tavi/actions/workflows/android.yml)
+
 <img src="assets/tavi-logo-original.png" alt="Tavi logo" width="96" />
 
 An Android app for local AI conversations with text, photos, and voice. Initial model integration focuses on Liquid AI's LFM3 family.
@@ -8,7 +10,7 @@ Built with Kotlin, Jetpack Compose and an embedded llama.cpp/libmtmd runtime. No
 
 ## Try it
 
-1. Build and install the debug APK on an ARM64 Android device (Android 8 or newer).
+1. Download a development APK from [GitHub Actions](https://github.com/tanishqpatil/Tavi/actions/workflows/android.yml), or build it locally, and install it on an ARM64 Android device (Android 8 or newer).
 2. Open **Models**, read the model license, and download LFM3 Text 1.7B. Keep Tavi open during the transfer.
 3. Tap **Load model**, then open **Chat**. Model files stay on your device.
 4. Enable **Settings → Developer view** for output-token counts, decode speed and first-text timing.
@@ -52,6 +54,18 @@ Photos are normalized to a maximum 1,024-pixel edge with orientation handling; a
 Tavi is the project owner's selected name. Other products use this name; no trademark clearance or vendor endorsement is claimed. The technical development application ID remains `app.lfm3.probe` to preserve existing installs.
 
 ## Build
+
+### Download from GitHub
+
+1. Open [Android build](https://github.com/tanishqpatil/Tavi/actions/workflows/android.yml) and select a successful run for `main`.
+2. Sign in to GitHub and download the **Tavi-arm64-debug-…** artifact under **Artifacts**. Extract the ZIP; it contains the APK, `SHA256SUMS.txt`, and build information. Install the `.apk`, not the ZIP.
+3. Artifacts expire after 14 days. Use **Run workflow → main** to build again if you have repository write access.
+
+Pushes to `main`, pull requests, and manual runs build the native ARM64 APK, run JVM tests and Android lint, compile instrumentation tests, and check APK signatures and 16 KB ZIP alignment. Test/lint reports are separate downloadable artifacts. CI does not download model weights or run inference or physical-device tests.
+
+These are development APKs with temporary debug signing keys. Android may refuse an update over a locally built or older CI APK signed with a different key. Uninstalling the existing app removes its local data and downloaded models; stable signing and release distribution remain future work.
+
+### Build locally
 
 Use JDK 17 and Android SDK 36. Set `ANDROID_HOME` or an ignored `local.properties` with your SDK path.
 

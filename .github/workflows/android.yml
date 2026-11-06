@@ -1,0 +1,122 @@
+name: Android build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Test and build ARM64 APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
+
+    steps:
+      - name: Check out source and pinned native runtime
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Set up Java 17
+        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android command-line tools
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+
+      - name: Install matching SDK, NDK and CMake
+        run: >-
+          sdkmanager --install
+          'platform-tools' 'platforms;android-36' 'build-tools;36.0.0'
+          'ndk;28.2.13676358' 'cmake;4.1.2'
+
+      - name: Validate Gradle wrapper and configure dependency cache
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          cache-provider: basic
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
+          validate-wrappers: true
+
+      # Compile instrumentation tests without starting an emulator or downloading weights.
+      - name: Run JVM tests, lint and native APK builds
+        run: >-
+          ./gradlew --no-daemon --stacktrace --max-workers=2
+          :app:testDebugUnitTest :app:lintDebug
+          :app:assembleDebug :app:assembleDebugAndroidTest
+
+      - name: Verify and package the APK
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk="app/build/outputs/apk/debug/app-debug.apk"
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -P 16 -v 4 "$apk"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$apk"
+          short_sha="${GITHUB_SHA:0:12}"
+          artifact_name="Tavi-arm64-debug-${GITHUB_RUN_NUMBER}-${short_sha}"
+          mkdir -p dist
+          cp "$apk" "dist/${artifact_name}.apk"
+          (
+            cd dist
+            sha256sum "${artifact_name}.apk" > SHA256SUMS.txt
+          )
+          {
+            echo "Tavi development build (ARM64, Android 8+)"
+            echo "Commit: $GITHUB_SHA"
+            echo "Native runtime: $(git -C native/llama.cpp rev-parse HEAD)"
+            echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo "No model weights included. Download a pack inside the app."
+            echo "Debug signing key is temporary; updates over other builds may fail."
+            echo "Uninstalling removes local app data and downloaded models."
+            echo "JVM tests and lint ran; phone inference/media tests did not run in CI."
+          } > dist/BUILD-INFO.txt
+          echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
+
+      - name: Upload installable APK and checksum
+        id: apk
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.package.outputs.artifact_name }}
+          path: dist/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      - name: Upload test and lint reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: checks-${{ github.run_number }}-${{ github.run_attempt }}
+          path: |
+            app/build/reports/tests/
+            app/build/reports/lint-results-debug.*
+            app/build/test-results/testDebugUnitTest/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Link the download in the build summary
+        env:
+          ARTIFACT_URL: ${{ steps.apk.outputs.artifact-url }}
+        run: |
+          {
+            echo '### Tavi development APK'
+            echo "[Download APK, checksum and build information]($ARTIFACT_URL)"
+            echo ''
+            echo 'Sign in to GitHub, download and extract the artifact ZIP, then install the APK on an ARM64 Android 8+ device.'
+            echo 'Artifacts expire after 14 days; rerun this workflow for a new build.'
+            echo 'This is a temporary-key debug build. Installing over another build may fail; uninstalling deletes local data/models.'
+            echo 'CI checks compilation, JVM tests, lint, APK signing and 16 KB ZIP alignment. Model inference and physical-device behavior are separate checks.'
+          } >> "$GITHUB_STEP_SUMMARY"
