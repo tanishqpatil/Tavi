@@ -158,10 +158,17 @@ private fun ChatPage(state: ProbeUiState, model: ProbeViewModel, developer: Bool
     }
     val capabilities = runtime.loadedId?.let { ModelCatalog.get(it).capabilities } ?: emptySet()
     val list = rememberLazyListState()
+    val endIndex = state.turns.lastIndex + if (state.totalTurns > state.turns.size / 2) 1 else 0
+    val lastQuestion = state.turns.lastOrNull { it is ProbeTurn.User }?.id
+    // Opening a saved chat or sending a question is an explicit request to see its newest turn.
+    // Loading older pages keeps the same last-question ID and preserves the reader's position.
+    LaunchedEffect(state.conversationId, lastQuestion) {
+        if (state.turns.isNotEmpty()) list.scrollToItem(endIndex)
+    }
     // Follow a stream only when the user is already reading its last message.
     LaunchedEffect(state.turns.lastOrNull(), state.isGenerating) {
         if (state.turns.isNotEmpty() && (!list.canScrollForward || list.layoutInfo.totalItemsCount == 0))
-            list.scrollToItem(state.turns.lastIndex)
+            list.scrollToItem(endIndex)
     }
     Column(Modifier.fillMaxSize()) {
         if (state.isHistoryBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -201,7 +208,7 @@ private fun ChatPage(state: ProbeUiState, model: ProbeViewModel, developer: Bool
             if (state.totalTurns > state.turns.size / 2) item {
                 TextButton(onClick = model::olderMessages, enabled = !state.isHistoryBusy && !state.isGenerating) { Text("Load older messages (${state.totalTurns} turns saved)") }
             }
-            items(state.turns, key = { "${it.id}-${it is ProbeTurn.User}" }) { turn ->
+            items(state.turns, key = { "${state.conversationId}-${it.id}-${it is ProbeTurn.User}" }) { turn ->
                 Message(turn, state.realInference, Modifier.then(if (reduced) Modifier else Modifier.animateItem()), state.isGenerating && turn.id == state.turns.lastOrNull()?.id)
             }
         }
