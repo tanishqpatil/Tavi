@@ -26,6 +26,7 @@ internal object InferenceWire {
         val messages = request.history + ChatMessage("user", request.parts.filterIsInstance<RequestPart.Text>().joinToString("\n") { it.value }, request.parts.filterNot { it is RequestPart.Text })
         val json = JSONObject().apply {
             put("turn", request.turnId); put("output", request.outputLimit); put("speak", request.speakResponse)
+            put("system", request.systemInstruction); put("routing", request.routingJson)
             put("messages", JSONArray().apply { messages.forEach { message -> put(JSONObject().apply {
                 put("role", message.role); put("text", message.text); put("media", ConversationRepository.encodeMedia(message.media))
             }) } })
@@ -46,8 +47,9 @@ internal object InferenceWire {
         }
         val last = messages.last(); require(last.role == "user")
         val output = json.getInt("output"); require(output in 64..2048)
+        val system = json.optString("system"); require(system.length <= 12_000)
         return InferenceRequest(json.getLong("turn"), listOf(RequestPart.Text(last.text)) + last.media,
-            messages.dropLast(1), ticket, output, json.getBoolean("speak"))
+            messages.dropLast(1), ticket, output, json.getBoolean("speak"), system, json.optBoolean("routing"))
     }
     fun descriptor(pack: ModelPack) = EngineDescriptor("llama.cpp v0.8.0 · ${pack.title} · CPU", pack.capabilities.map { when (it) {
         ModelCapability.TEXT -> Capability.TEXT; ModelCapability.PHOTO -> Capability.IMAGE

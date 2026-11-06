@@ -50,6 +50,20 @@ History lists 30 conversations per page and initially opens the last 40 turns; o
 
 Native inference runs in a private, non-exported `:inference` service process. If that process dies, the UI stays available, marks the reply interrupted and retains its received text. Open **Models → Load model**, then use **Review last question to retry** and press Send when ready. Reload never automatically resends a question, photo or recording, and a failed native session never silently switches to preview output. Cancellation waits for remote shutdown; an unresponsive process is terminated. Model files are protected by OS-backed leases while mapped. This is crash containment, not a guarantee against Android terminating the whole app under memory pressure.
 
+## Optional web search and MCP
+
+**Offline is the default.** In **Settings → Online tools**, choose **Ask first** to review outgoing arguments, or explicitly enable **Auto search**. The on-device text model decides whether to answer locally, search, or use an enabled MCP tool. Each turn permits at most one tool call followed by a local answer. Routing can be wrong; check the returned sources. There is no autonomous task loop or cloud inference.
+
+- **Exa:** ready-to-use keyless search through [Exa MCP](https://exa.ai/mcp). No account/API key needed. Its [MCP server is open source](https://github.com/exa-labs/exa-mcp-server); the hosted search backend is operated by Exa. Free rate limits and availability apply.
+- **SearXNG:** fully open-source alternative. Supply your own HTTPS instance base URL with [JSON search enabled](https://docs.searxng.org/dev/search_api.html). Many public instances disable API access; Tavi does not bundle an unverified public instance or scrape around access restrictions.
+- **Custom MCP:** enter a keyless HTTPS Streamable HTTP endpoint, connect, then select up to three supported read-only tools. Every custom tool call requires approval, including in Auto search. Read-only annotations are server claims; use a trusted server. Reconnect after restarting Tavi to inspect selected tools again.
+
+This first implementation requires **LFM3 Text**, **2048+ loaded context tokens**, text-only history and questions up to 1200 characters. Change context in Settings, then unload/reload the model. Leave online tools off for photo/voice packs. Tool schemas/evidence consume context; native admission rejects overflow visibly. Hidden routing tokens are excluded from final-answer tokens/second. Actual provider-returned source links and retrieval time persist in History and conversation exports; links are provenance, not proof every generated claim is correct.
+
+Enabling online tools sends the model's query/tool arguments to the chosen provider; these can contain details from your question or recent text. Connecting an MCP endpoint sends protocol/app metadata. This feature does not upload photos, recordings, model weights or the full conversation. Remote providers can apply their own retention policies. Stop/backgrounding cancels the pipeline, but cannot undo a request already received remotely. There are no automatic tool retries or silent provider fallbacks.
+
+MCP support is deliberately limited to initialize-era protocol versions **2025-11-25 / 2025-06-18 / 2025-03-26**, JSON and request-scoped SSE, discovery and text tool results. It is not universal/latest-protocol compatibility. Flat primitive argument schemas only; unsupported tools stay disabled. OAuth/API keys, stdio subprocesses, write tools, subscriptions, sampling and server-initiated requests are not implemented. Broader agentic workflows remain internal analysis only.
+
 ## Experimental phone testing
 
 For media tests, consider a 4,096-token context and a 256-token output cap as a starting experiment, then reload. This is not a memory/performance guarantee. Short recordings and a single photo are easier to diagnose first.
@@ -105,6 +119,10 @@ adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
 adb shell am instrument -w -e class app.lfm3.probe.ConversationStorageTest app.lfm3.probe.test/androidx.test.runner.AndroidJUnitRunner
 # Opt-in: installed text weights required; kills only the private inference process.
 adb shell am instrument -w -e class app.lfm3.probe.RuntimeRecoveryTest -e runModelTest true app.lfm3.probe.test/androidx.test.runner.AndroidJUnitRunner
+# Tool fixtures (no network by default); add -e runOnlineTest true for the public keyless search check.
+adb shell am instrument -w -e class app.lfm3.probe.OnlineToolsTest app.lfm3.probe.test/androidx.test.runner.AndroidJUnitRunner
+# Opt-in: installed text model, routing decisions, then live search and local answer.
+adb shell am instrument -w -e class app.lfm3.probe.OnlineRoutingDeviceTest -e runModelTest true -e runOnlineTest true app.lfm3.probe.test/androidx.test.runner.AndroidJUnitRunner
 ```
 
 `BackgroundDownloadTest` with `runDownloadTest=true` is a separate development-device test: it truncates/re-downloads part of the verified text pack, tests notification pause/resume, and temporarily backgrounds the app and turns the screen off. Do not run it against a device/session whose current state you need to preserve. Manual restart-test flags are explicitly guarded in its source.

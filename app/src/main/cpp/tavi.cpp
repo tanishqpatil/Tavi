@@ -123,7 +123,7 @@ extern "C" JNIEXPORT void JNICALL Java_app_lfm3_probe_inference_NativeLlama_load
     } catch (const std::exception & e) { error(env, e.what()); }
 }
 
-extern "C" JNIEXPORT void JNICALL Java_app_lfm3_probe_inference_NativeLlama_begin(JNIEnv * env, jobject, jobjectArray contents, jobjectArray roles, jlong ticket, jint output_limit, jobjectArray media_files, jboolean speak) {
+extern "C" JNIEXPORT void JNICALL Java_app_lfm3_probe_inference_NativeLlama_begin(JNIEnv * env, jobject, jobjectArray contents, jobjectArray roles, jlong ticket, jint output_limit, jobjectArray media_files, jboolean speak, jboolean routing_json) {
     std::lock_guard<std::mutex> guard(lock);
     try {
         auto & s = ready();
@@ -135,7 +135,26 @@ extern "C" JNIEXPORT void JNICALL Java_app_lfm3_probe_inference_NativeLlama_begi
         if (abort_cpu(&s)) throw std::runtime_error("Response stopped.");
         // Every turn is reconstructed. Aborted hybrid state is never reused implicitly.
         llama_memory_clear(llama_get_memory(s.context), true);
-        llama_sampler_reset(s.sampler); s.position = 0; s.tokens = 0; s.nanos = 0;
+        // Recreate on every pass so routing constraints cannot leak into ordinary answers.
+        llama_sampler_free(s.sampler);
+        s.sampler = llama_sampler_chain_init(llama_sampler_chain_default_params());
+        if (!s.sampler) throw std::runtime_error("Unable to allocate sampler.");
+        if (routing_json) {
+            if (s.media || speak) throw std::runtime_error("Online routing currently requires the text pack without media.");
+            const char * grammar = R"gbnf(
+root ::= "{" ws "\"action\"" ws ":" ws ("\"answer\"" ws "}" | "\"web\"" ws "," ws "\"query\"" ws ":" ws string "}" | "\"mcp\"" ws "," ws "\"tool\"" ws ":" ws string "," ws "\"arguments\"" ws ":" ws object "}") ws
+object ::= "{" ws (string ":" ws value ("," ws string ":" ws value)*)? "}" ws
+value ::= string | number | "true" ws | "false" ws
+string ::= "\"" ([^"\\\x7F\x00-\x1F] | "\\" (["\\bfnrt] | "u" [0-9a-fA-F]{4}))* "\"" ws
+number ::= "-"? ("0" | [1-9][0-9]{0,8}) ("." [0-9]{1,8})? ws
+ws ::= [ \t\n]{0,4}
+)gbnf";
+            auto constraint = llama_sampler_init_grammar(llama_model_get_vocab(s.model), grammar, "root");
+            if (!constraint) throw std::runtime_error("Routing grammar initialization failed.");
+            llama_sampler_chain_add(s.sampler, constraint);
+        }
+        llama_sampler_chain_add(s.sampler, llama_sampler_init_greedy());
+        s.position = 0; s.tokens = 0; s.nanos = 0;
         int count = env->GetArrayLength(contents);
         if (count != env->GetArrayLength(roles) || count < 1 || count > 201) throw std::runtime_error("Invalid chat history.");
         std::vector<std::string> text, role;

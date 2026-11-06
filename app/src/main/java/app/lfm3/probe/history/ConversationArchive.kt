@@ -33,6 +33,7 @@ class ConversationArchive(private val repository: ConversationRepository, privat
                 put("text", when (turn) { is ProbeTurn.User -> turn.text; is ProbeTurn.Assistant -> turn.text })
                 put("status", if (turn is ProbeTurn.Assistant) turn.status.name else "COMPLETE")
                 put("media", if (turn is ProbeTurn.User) ConversationRepository.encodeMedia(turn.media) else JSONArray())
+                if (turn is ProbeTurn.Assistant && turn.receipt != null) put("receipt", turn.receipt.json())
             }) } })
             put("attachments", JSONArray().apply { attachments.forEach { file -> put(JSONObject().apply {
                 put("name", file.name); put("bytes", file.length()); put("sha256", digest(file))
@@ -108,7 +109,7 @@ class ConversationArchive(private val repository: ConversationRepository, privat
                     require(assistant.getJSONArray("media").length() == 0)
                     val status = ReplyStatus.valueOf(assistant.getString("status")).let { if (it == ReplyStatus.STREAMING) ReplyStatus.INTERRUPTED else it }
                     add(ProbeTurn.User(id, text, parts.any { it is RequestPart.Image }, parts.any { it is RequestPart.Audio }, parts))
-                    add(ProbeTurn.Assistant(id, reply, status))
+                    add(ProbeTurn.Assistant(id, reply, status, assistant.optJSONObject("receipt")?.let { app.lfm3.probe.online.ToolReceipt.decode(it) }))
                 }
             }
             require(turns.filterIsInstance<ProbeTurn.User>().flatMap { it.media }.map { ConversationRepository.reference(it) }.toSet() == renames.values.toSet())

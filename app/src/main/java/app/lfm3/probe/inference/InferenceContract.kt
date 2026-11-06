@@ -29,6 +29,9 @@ data class InferenceRequest(
     val generationTicket: Long = 0,
     val outputLimit: Int = 128,
     val speakResponse: Boolean = false,
+    val systemInstruction: String = "",
+    /** Host-owned routing grammar only; never accept arbitrary grammar from a server/model. */
+    val routingJson: Boolean = false,
 )
 
 data class ChatMessage(val role: String, val text: String, val media: List<RequestPart> = emptyList())

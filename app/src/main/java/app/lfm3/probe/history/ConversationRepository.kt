@@ -16,6 +16,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.util.UUID
+import app.lfm3.probe.online.ToolReceipt
 
 data class ConversationSummary(val id: String, val title: String, val updated: Long, val real: Boolean, val count: Int)
 data class SavedConversation(
@@ -56,6 +57,7 @@ class ConversationRepository(context: Context) {
                     put("text", text)
                     put("status", if (turn is ProbeTurn.Assistant) turn.status.name else "COMPLETE")
                     put("media", if (turn is ProbeTurn.User) encodeMedia(turn.media).toString() else "[]")
+                    put("receipt", if (turn is ProbeTurn.Assistant) turn.receipt?.json()?.toString().orEmpty() else "")
                 }
                 db.insertWithOnConflict("messages", null, values, SQLiteDatabase.CONFLICT_REPLACE).also { check(it != -1L) }
             }
@@ -88,7 +90,8 @@ class ConversationRepository(context: Context) {
                     if (m.string("role") == "user") {
                         val media = decodeMedia(JSONArray(m.string("media")))
                         add(ProbeTurn.User(turn, text, media.any { it is RequestPart.Image }, media.any { it is RequestPart.Audio }, media))
-                    } else add(ProbeTurn.Assistant(turn, text, ReplyStatus.valueOf(m.string("status"))))
+                    } else add(ProbeTurn.Assistant(turn, text, ReplyStatus.valueOf(m.string("status")),
+                        m.string("receipt").takeIf { it.isNotEmpty() }?.let { ToolReceipt.decode(JSONObject(it)) }))
                 } }
             }
             SavedConversation(id, c.string("title"), turns, c.getInt(c.getColumnIndexOrThrow("real")) != 0,
@@ -111,7 +114,7 @@ class ConversationRepository(context: Context) {
     }
 
     private class Database(context: Context) : SQLiteOpenHelper(context,
-        File(context.noBackupFilesDir, "history/conversations.db").apply { parentFile!!.mkdirs() }.path, null, 1) {
+        File(context.noBackupFilesDir, "history/conversations.db").apply { parentFile!!.mkdirs() }.path, null, 2) {
         init { setWriteAheadLoggingEnabled(true) }
         override fun onConfigure(db: SQLiteDatabase) { db.setForeignKeyConstraintsEnabled(true) }
         override fun onCreate(db: SQLiteDatabase) {
@@ -119,12 +122,12 @@ class ConversationRepository(context: Context) {
                 real INTEGER NOT NULL,engine TEXT NOT NULL,draft TEXT NOT NULL,speak INTEGER NOT NULL)""")
             db.execSQL("""CREATE TABLE messages(chat TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
                 turn INTEGER NOT NULL,role TEXT NOT NULL CHECK(role IN ('user','assistant')),text TEXT NOT NULL,
-                status TEXT NOT NULL,media TEXT NOT NULL,PRIMARY KEY(chat,turn,role))""")
+                status TEXT NOT NULL,media TEXT NOT NULL,receipt TEXT NOT NULL DEFAULT '',PRIMARY KEY(chat,turn,role))""")
             db.execSQL("CREATE INDEX conversations_updated ON conversations(updated DESC)")
         }
         override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-            // Never erase conversations as an implicit migration fallback.
-            error("Unsupported history schema migration: $oldVersion to $newVersion")
+            if (oldVersion == 1 && newVersion == 2) db.execSQL("ALTER TABLE messages ADD COLUMN receipt TEXT NOT NULL DEFAULT ''")
+            else error("Unsupported history schema migration: $oldVersion to $newVersion")
         }
     }
 

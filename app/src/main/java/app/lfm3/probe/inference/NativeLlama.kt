@@ -7,7 +7,7 @@ object NativeLlama {
     external fun prepare(): Long
     external fun load(path: String, contextTokens: Int = 1024, projector: String = "")
     external fun unload()
-    external fun begin(contents: Array<ByteArray>, roles: Array<String>, ticket: Long, outputLimit: Int = 128, mediaFiles: Array<String> = emptyArray(), speak: Boolean = false)
+    external fun begin(contents: Array<ByteArray>, roles: Array<String>, ticket: Long, outputLimit: Int = 128, mediaFiles: Array<String> = emptyArray(), speak: Boolean = false, routingJson: Boolean = false)
     external fun next(): ByteArray?
     external fun cancel()
     external fun usage(): LongArray

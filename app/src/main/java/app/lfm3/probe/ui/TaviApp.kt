@@ -75,7 +75,7 @@ fun TaviApp(
     val runtime = application.runtime
     val factory = remember(runtime) { object : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
-        override fun <T : ViewModel> create(modelClass: Class<T>): T = ProbeViewModel(runtime.engine, application.media, application.conversations, application.contentResolver) as T
+        override fun <T : ViewModel> create(modelClass: Class<T>): T = ProbeViewModel(runtime.engine, application.media, application.conversations, application.contentResolver, application.online, { runtime.state.value.loadedContext }) as T
     } }
     val model: ProbeViewModel = viewModel(factory = factory)
     SideEffect { model.outputLimit = limits.output }
@@ -142,6 +142,17 @@ fun TaviApp(
         confirmButton = { TextButton(onClick = { model.newChat(); clearConfirmation = false; page = Page.CHAT }) { Text("New chat") } },
         dismissButton = { TextButton(onClick = { clearConfirmation = false }) { Text("Keep chatting") } },
     )
+    state.toolProgress.approval?.let { approval -> AlertDialog(
+        onDismissRequest = { model.approveTool(approval.id, false) }, title = { Text("Allow this online request?") },
+        text = { Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(approval.destination, style = MaterialTheme.typography.titleSmall)
+            Text(approval.operation)
+            SelectionContainer { Text(approval.arguments, style = MaterialTheme.typography.bodySmall) }
+            Text("These arguments are sent with protocol/network metadata. Remote tool descriptions and read-only labels are untrusted.", style = MaterialTheme.typography.bodySmall)
+        } },
+        confirmButton = { TextButton(onClick = { model.approveTool(approval.id, true) }) { Text("Allow once") } },
+        dismissButton = { TextButton(onClick = { model.approveTool(approval.id, false) }) { Text("Decline") } },
+    ) }
 }
 
 @Composable
@@ -150,6 +161,7 @@ private fun ChatPage(state: ProbeUiState, model: ProbeViewModel, developer: Bool
     val viewingPreview = preview || (!state.realInference && state.turns.isNotEmpty())
     val canChat = runtime.loaded || viewingPreview
     val context = LocalContext.current
+    val online by (context.applicationContext as TaviApplication).online.config.collectAsStateWithLifecycle()
     var photoMenu by remember { mutableStateOf(false) }
     var captureName by rememberSaveable { mutableStateOf<String?>(null) }
     val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> uri?.let(model::importPhoto) }
@@ -187,7 +199,7 @@ private fun ChatPage(state: ProbeUiState, model: ProbeViewModel, developer: Bool
                 Glyph("models", tint = MaterialTheme.colorScheme.primary)
                 Column(Modifier.padding(start = 10.dp).weight(1f)) {
                     Text(if (runtime.loaded) ModelCatalog.get(runtime.loadedId!!).title else if (viewingPreview) "UI preview" else "Choose your first model", style = MaterialTheme.typography.labelLarge)
-                    Text(if (runtime.loaded) runtime.message else if (viewingPreview) "Simulated responses · no model loaded" else "Get ready for local conversations", style = MaterialTheme.typography.bodySmall)
+                    Text((if (runtime.loaded) runtime.message else if (viewingPreview) "Simulated responses · no model loaded" else "Get ready for local conversations") + " · " + online.mode.label, style = MaterialTheme.typography.bodySmall)
                 }
                 Glyph("arrow")
             }
@@ -220,6 +232,7 @@ private fun ChatPage(state: ProbeUiState, model: ProbeViewModel, developer: Bool
                 Message(turn, state.realInference, Modifier.then(if (reduced) Modifier else Modifier.animateItem()), state.isGenerating && turn.id == state.turns.lastOrNull()?.id)
             }
         }
+        if (state.toolProgress.stage.isNotEmpty()) Text(state.toolProgress.stage, Modifier.padding(horizontal = 24.dp, vertical = 4.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
         state.error?.let { Text(it, Modifier.padding(horizontal = 24.dp, vertical = 6.dp), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         if (state.turns.lastOrNull().let { it is ProbeTurn.Assistant && it.status in setOf(ReplyStatus.INTERRUPTED, ReplyStatus.FAILED) }) {
             TextButton(onClick = model::reviewLastQuestion, enabled = runtime.loaded && !state.isGenerating && !state.isHistoryBusy,
@@ -316,6 +329,20 @@ private fun Message(turn: ProbeTurn, real: Boolean, modifier: Modifier = Modifie
                             if (turn.status == ReplyStatus.INTERRUPTED) "Interrupted · partial reply saved" else "Response failed · excluded from follow-up context",
                             style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
                         if (turn.text.isBlank() && turn.status == ReplyStatus.STREAMING) Text("Preparing response…")
+                        turn.receipt?.let { receipt ->
+                            val uriHandler = LocalUriHandler.current
+                            HorizontalDivider()
+                            Text("${receipt.provider} · ${receipt.operation} · " + java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT).format(java.util.Date(receipt.time)), style = MaterialTheme.typography.labelSmall)
+                            receipt.sources.forEachIndexed { index, source ->
+                                TextButton(onClick = { runCatching { uriHandler.openUri(source.url) } }) {
+                                    Column {
+                                        Text("[${index + 1}] ${source.title}", maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                        Text(java.net.URI(source.url).host, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
+                            }
+                            if (receipt.sources.isNotEmpty()) Text("Links returned by the search provider; check that they support the answer.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
                 } else Text((turn as ProbeTurn.User).text, Modifier.padding(16.dp), style = MaterialTheme.typography.bodyLarge)
             }
@@ -437,6 +464,7 @@ private fun SettingsPage(theme: ThemeChoice, developer: Boolean, reduced: Boolea
                          limits: GenerationLimits, onLimits: (GenerationLimits) -> Unit) {
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
         item { PageHeading("Make it yours", "A calmer space, set up your way.") }
+        item { OnlineSettings((LocalContext.current.applicationContext as TaviApplication).online) }
         item {
             Eyebrow("GENERATION")
             Text("Context tokens", Modifier.padding(top = 12.dp), style = MaterialTheme.typography.titleSmall)

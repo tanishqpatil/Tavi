@@ -8,4 +8,5 @@ class TaviApplication : Application() {
     val conversations by lazy { app.lfm3.probe.history.ConversationRepository(this) }
     val downloads by lazy { app.lfm3.probe.models.DownloadCoordinator(this) }
     val runtime by lazy { RuntimeManager(this) }
+    val online by lazy { app.lfm3.probe.online.OnlineTools(this) }
 }

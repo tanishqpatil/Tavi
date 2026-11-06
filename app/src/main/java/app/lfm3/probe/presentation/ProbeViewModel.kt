@@ -26,12 +26,15 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import app.lfm3.probe.history.*
 import android.content.ContentResolver
+import app.lfm3.probe.online.*
 
 class ProbeViewModel(
     private val engine: InferenceEngine = DeterministicProbeEngine(),
     private val mediaStore: MediaStore? = null,
     private val repository: ConversationRepository? = null,
     private val resolver: ContentResolver? = null,
+    private val online: OnlineTools? = null,
+    private val loadedContext: () -> Int = { 0 },
 ) : ViewModel() {
     private val _state = MutableStateFlow(ProbeUiState(isHistoryBusy = repository != null))
     val state: StateFlow<ProbeUiState> = _state.asStateFlow()
@@ -181,7 +184,8 @@ class ProbeViewModel(
         }
     }
     fun stopRecording(discard: Boolean = false) { recorder?.stop(); if (discard) recording?.cancel() }
-    override fun onCleared() { engine.cancel(); stopRecording(true); super.onCleared() }
+    override fun onCleared() { online?.cancel(); engine.cancel(); stopRecording(true); super.onCleared() }
+    fun approveTool(id: Long, allow: Boolean) { online?.approve(id, allow) }
 
     fun newChat() {
         if (repository != null) { historyAction(stop = true) { checkpoint(true); resetChat(); refreshLibrary() }; return }
@@ -262,10 +266,18 @@ class ProbeViewModel(
                         is ProbeTurn.Assistant -> ChatMessage("assistant", it.text)
                     }
                 }
-                engine.generate(InferenceRequest(turnId, requestParts, history, generationTicket, outputLimit,
-                    snapshot.speakReplies)) { event -> withContext(Dispatchers.Main.immediate) {
+                val request = InferenceRequest(turnId, requestParts, history, generationTicket, outputLimit, snapshot.speakReplies)
+                val emit: suspend (InferenceEvent) -> Unit = { event -> withContext(Dispatchers.Main.immediate) {
                         if (epoch == chatEpoch && _state.value.conversationId == snapshot.conversationId) handleEvent(event)
                     } }
+                if (online == null) engine.generate(request, emit)
+                else online.generate(engine, request, loadedContext(), { progress -> withContext(Dispatchers.Main.immediate) {
+                    if (epoch == chatEpoch && activeTurnId == turnId && _state.value.conversationId == snapshot.conversationId) _state.update { state ->
+                        state.copy(toolProgress = progress, turns = if (progress.receipt != null) state.turns.map {
+                            if (it is ProbeTurn.Assistant && it.id == turnId) it.copy(receipt = progress.receipt) else it
+                        } else state.turns, trace = if (progress.stage.isNotEmpty()) (state.trace + progress.stage).takeLast(32) else state.trace)
+                    }
+                } }, emit)
             } catch (_: CancellationException) {
                 // Cancellation is expected. A future native adapter must stop native work here too.
             } catch (e: Exception) {
@@ -276,7 +288,7 @@ class ProbeViewModel(
                 snapshots?.cancel()
                 if (activeTurnId == turnId) {
                     activeTurnId = null
-                    _state.update { it.copy(isGenerating = false, turns = markReply(it.turns, turnId, ReplyStatus.INTERRUPTED, onlyStreaming = true)) }
+                    _state.update { it.copy(isGenerating = false, toolProgress = ToolProgress(), turns = markReply(it.turns, turnId, ReplyStatus.INTERRUPTED, onlyStreaming = true)) }
                 }
                 withContext(NonCancellable) {
                     try { checkpoint(); refreshLibrary() }
@@ -287,11 +299,12 @@ class ProbeViewModel(
     }
 
     fun cancel() {
+        online?.cancel()
         engine.cancel()
         val interrupted = activeTurnId
         activeTurnId = null // A late callback from a cancelled engine cannot alter a later turn.
         generation?.cancel()
-        _state.update { it.copy(isGenerating = false, turns = if (interrupted != null) markReply(it.turns, interrupted, ReplyStatus.INTERRUPTED) else it.turns,
+        _state.update { it.copy(isGenerating = false, toolProgress = ToolProgress(), turns = if (interrupted != null) markReply(it.turns, interrupted, ReplyStatus.INTERRUPTED) else it.turns,
             error = if (interrupted != null) "Response stopped. Partial reply saved." else it.error, trace = (it.trace + "Cancellation acknowledged").takeLast(32)) }
         if (repository != null && interrupted != null) cancellationSave = viewModelScope.launch { runCatching { checkpoint() } }
     }
@@ -321,7 +334,7 @@ class ProbeViewModel(
             is InferenceEvent.Completed -> {
                 completedTurns += event.turnId
                 activeTurnId = null
-                _state.update { it.copy(isGenerating = false, turns = markReply(it.turns, event.turnId, ReplyStatus.COMPLETE), error = if (event.outputLimitReached) "Response reached the configured output-token limit." else null, trace = (it.trace + "Stream completed" + "Tokenizer usage: ${if (it.metrics.outputTokens == null) "unavailable" else "reported by runtime"}").takeLast(32)) }
+                _state.update { it.copy(isGenerating = false, toolProgress = ToolProgress(), turns = markReply(it.turns, event.turnId, ReplyStatus.COMPLETE), error = if (event.outputLimitReached) "Response reached the configured output-token limit." else null, trace = (it.trace + "Stream completed" + "Tokenizer usage: ${if (it.metrics.outputTokens == null) "unavailable" else "reported by runtime"}").takeLast(32)) }
             }
             is InferenceEvent.Failed -> {
                 activeTurnId = null
@@ -358,6 +371,7 @@ data class ProbeUiState(
     val isRecording: Boolean = false,
     val isImporting: Boolean = false,
     val speakReplies: Boolean = false,
+    val toolProgress: ToolProgress = ToolProgress(),
 )
 
 data class GenerationMetrics(val outputTokens: Int? = null, val decodeNanos: Long? = null, val firstTextMs: Long? = null) {
@@ -377,5 +391,6 @@ sealed interface ProbeTurn {
         val media: List<RequestPart> = emptyList(),
     ) : ProbeTurn
 
-    data class Assistant(override val id: Long, val text: String, val status: ReplyStatus = ReplyStatus.STREAMING) : ProbeTurn
+    data class Assistant(override val id: Long, val text: String, val status: ReplyStatus = ReplyStatus.STREAMING,
+                         val receipt: ToolReceipt? = null) : ProbeTurn
 }

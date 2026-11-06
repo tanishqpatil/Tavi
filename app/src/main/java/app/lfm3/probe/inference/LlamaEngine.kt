@@ -56,7 +56,7 @@ class LlamaEngine(private val mediaStore: MediaStore? = null) : InferenceEngine 
             generating = true
             try {
                 currentCoroutineContext().ensureActive()
-                val messages = request.history + ChatMessage("user", request.parts.filterIsInstance<RequestPart.Text>().joinToString("\n") { it.value }, media)
+                val messages = (if (request.systemInstruction.isNotEmpty()) listOf(ChatMessage("system", request.systemInstruction)) else emptyList()) + request.history + ChatMessage("user", request.parts.filterIsInstance<RequestPart.Text>().joinToString("\n") { it.value }, media)
                 val references = messages.flatMap { it.media }.map { when (it) {
                     is RequestPart.Image -> it.privateReference; is RequestPart.Audio -> it.privateReference
                     is RequestPart.Text -> error("Invalid media part.")
@@ -64,7 +64,7 @@ class LlamaEngine(private val mediaStore: MediaStore? = null) : InferenceEngine 
                 require(references.size <= 8) { "Eight media attachments per session maximum. Start a new chat." }
                 val paths = references.map { checkNotNull(mediaStore) { "Private media storage unavailable." }.resolve(it).absolutePath }.toTypedArray()
                 val contents = messages.map { (it.text + "\n<__media__>".repeat(it.media.size)).toByteArray(Charsets.UTF_8) }.toTypedArray()
-                NativeLlama.begin(contents, messages.map { it.role }.toTypedArray(), request.generationTicket, request.outputLimit, paths, request.speakResponse)
+                NativeLlama.begin(contents, messages.map { it.role }.toTypedArray(), request.generationTicket, request.outputLimit, paths, request.speakResponse, request.routingJson)
                 // Token pieces may split UTF-8 characters. Preserve incomplete bytes until the next piece.
                 val decoder = Charsets.UTF_8.newDecoder()
                 val bytes = ByteBuffer.allocate(8192)
