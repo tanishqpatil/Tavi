@@ -19,10 +19,10 @@ class DeterministicProbeEngine : InferenceEngine {
         val hasImage = request.parts.any { it is RequestPart.Image }
         val hasAudio = request.parts.any { it is RequestPart.Audio }
         val response = buildString {
-            append("Probe response. ")
+            append("This is Tavi’s interface preview. ")
             append(if (hasImage) "The request includes a private photo reference. " else "No photo is attached. ")
             append(if (hasAudio) "The request includes recorded audio metadata. " else "No recorded audio is attached. ")
-            append("Replace this adapter only after a pinned LFM3 runtime passes P1.")
+            append("Your message reached the local preview adapter. Connect a verified LFM3 model to receive an AI response.")
         }
 
         response.split(" ").forEach { word ->

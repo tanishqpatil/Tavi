@@ -34,6 +34,8 @@ sealed interface RequestPart {
 }
 
 sealed interface InferenceEvent {
+    /** Exact output-token count and decode duration reported by the runtime, never word estimates. */
+    data class Usage(val turnId: Long, val outputTokens: Int, val decodeNanos: Long) : InferenceEvent
     data class TextDelta(val turnId: Long, val value: String) : InferenceEvent
     data class Completed(val turnId: Long) : InferenceEvent
     data class Failed(val turnId: Long, val reason: String) : InferenceEvent
