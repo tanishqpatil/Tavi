@@ -10,7 +10,7 @@ Built with Kotlin, Jetpack Compose and an embedded llama.cpp/libmtmd runtime. No
 
 ## Try it
 
-1. Download a development APK from [GitHub Actions](https://github.com/tanishqpatil/Tavi/actions/workflows/android.yml), or build it locally, and install it on an ARM64 Android device (Android 8 or newer).
+1. Download the signed ARM64 APK from [GitHub Releases](https://github.com/tanishqpatil/Tavi/releases), or build it locally. Android 8 or newer is required. Initial releases are development prereleases; phone validation is still pending.
 2. Open **Models**, read the model license, and download LFM3 Text 1.7B. Downloads continue in the background; by default they wait for an unmetered network.
 3. Tap **Load model**, then open **Chat**. Model files stay on your device.
 4. Enable **Settings → Developer view** for output-token counts, decode speed and first-text timing.
@@ -81,13 +81,19 @@ Tavi is the project owner's selected name. Other products use this name; no trad
 
 ### Download from GitHub
 
+**Signed release APK:** open [Releases](https://github.com/tanishqpatil/Tavi/releases), expand the version's **Assets**, and download `Tavi-<version>-arm64.apk` directly. No GitHub login or artifact ZIP extraction is required. `SHA256SUMS.txt` and `BUILD-INFO.txt` accompany the APK. Release assets remain available beyond the Actions artifact retention period. The public signing certificate SHA-256 is recorded in [assets/tavi-release-certificate.sha256](assets/tavi-release-certificate.sha256).
+
+Release APKs use a stable signing key. They cannot update a debug APK signed with another key. Export conversations before choosing to uninstall an incompatible debug build; uninstalling removes its private chats and downloaded models. Future release updates must keep the same signing key and increase the Android version code.
+
+**Debug CI APK:**
+
 1. Open [Android build](https://github.com/tanishqpatil/Tavi/actions/workflows/android.yml) and select a successful run for `main`.
 2. Sign in to GitHub and download the **Tavi-arm64-debug-…** artifact under **Artifacts**. Extract the ZIP; it contains the APK, `SHA256SUMS.txt`, and build information. Install the `.apk`, not the ZIP.
 3. Artifacts expire after 14 days. Use **Run workflow → main** to build again if you have repository write access.
 
 Pushes to `main`, pull requests, and manual runs build the native ARM64 APK, run JVM tests and Android lint, compile instrumentation tests, and check APK signatures and 16 KB ZIP alignment. Test/lint reports are separate downloadable artifacts. CI does not download model weights or run inference or physical-device tests.
 
-These are development APKs with temporary debug signing keys. Android may refuse an update over a locally built or older CI APK signed with a different key. Uninstalling the existing app removes its local data and downloaded models; stable signing and release distribution remain future work.
+These Actions artifacts are debug builds with temporary keys, separate from signed GitHub Releases. Android may refuse an update over a locally built or older CI APK signed with a different key. Export history before uninstalling an incompatible build.
 
 ### Build locally
 
@@ -103,6 +109,14 @@ git submodule update --init --recursive
 ```
 
 Debug APK: `app/build/outputs/apk/debug/app-debug.apk`.
+
+### Publishing a signed release
+
+The [Signed Android release workflow](https://github.com/tanishqpatil/Tavi/actions/workflows/release.yml) runs on `v*` tags or a manual run targeting an existing version tag. Set `taviVersionName` and an increased `taviVersionCode` in `gradle.properties`, commit/push to `main`, then create/push the matching tag (for example `v0.1.0-alpha.1`). The workflow verifies that the tag matches the source version and is on `main` history.
+
+Repository secrets: `TAVI_SIGNING_KEYSTORE_BASE64` (PKCS12), `TAVI_SIGNING_STORE_PASSWORD`, `TAVI_SIGNING_KEY_ALIAS`, and `TAVI_SIGNING_KEY_PASSWORD`. Private signing material is never committed or uploaded as an artifact. Local signed builds read `TAVI_SIGNING_KEYSTORE` (file path) and the three password/alias environment variables; without them, a local release build is unsigned and cannot pass publication verification.
+
+CI runs the shared JVM tests through `testDebugUnitTest` and release lint, builds the signed release, verifies its certificate against the public fingerprint, checks application ID/version/non-debuggable status, ARM64 packaging and 16 KB ZIP alignment, then uploads a draft's assets before publishing. Tags containing a prerelease suffix are marked **Pre-release**. Already-published assets are not overwritten. Phone inference/media qualification remains separate from signing and packaging checks.
 
 ## Development
 

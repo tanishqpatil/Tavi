@@ -500,7 +500,7 @@ private fun SettingsPage(theme: ThemeChoice, developer: Boolean, reduced: Boolea
         }
         item {
             Text("Tavi", style = MaterialTheme.typography.titleLarge)
-            Text("0.1.0 · Development preview\nBuilt for local text, vision, and voice.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("${app.lfm3.probe.BuildConfig.VERSION_NAME} · Development preview\nBuilt for local text, vision, and voice.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

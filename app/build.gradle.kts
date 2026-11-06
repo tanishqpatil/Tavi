@@ -12,8 +12,10 @@ android {
         applicationId = "app.lfm3.probe"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0-dev"
+        versionCode = providers.gradleProperty("taviVersionCode").get().toInt().also {
+            require(it in 1..2_100_000_000) { "Invalid Android version code." }
+        }
+        versionName = providers.gradleProperty("taviVersionName").get()
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk { abiFilters += "arm64-v8a" }
@@ -23,6 +25,22 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+    // Release credentials enter only through the build environment. Never store passwords in Gradle properties.
+    val releaseStore = providers.environmentVariable("TAVI_SIGNING_KEYSTORE").orNull
+    if (releaseStore != null) signingConfigs.create("release") {
+        storeFile = file(releaseStore)
+        storePassword = providers.environmentVariable("TAVI_SIGNING_STORE_PASSWORD").get()
+        keyAlias = providers.environmentVariable("TAVI_SIGNING_KEY_ALIAS").get()
+        keyPassword = providers.environmentVariable("TAVI_SIGNING_KEY_PASSWORD").get()
+        storeType = "PKCS12"
+    }
+    buildTypes.named("release") {
+        isDebuggable = false
+        // Keep the first distributable build behavior aligned with the qualified runtime.
+        // R8/resource shrinking need a separate JNI/reflection regression gate.
+        isMinifyEnabled = false
+        if (releaseStore != null) signingConfig = signingConfigs.getByName("release")
     }
     externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "4.1.2" } }
 

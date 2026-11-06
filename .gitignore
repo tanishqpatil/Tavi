@@ -16,3 +16,6 @@ app-logs/
 .cxx/
 **/.cxx/
 model-cache/
+dist/
+*.p12
+*.pfx
