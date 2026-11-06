@@ -206,6 +206,10 @@ private fun ChatPage(state: ProbeUiState, model: ProbeViewModel, developer: Bool
             }
         }
         state.error?.let { Text(it, Modifier.padding(horizontal = 24.dp, vertical = 6.dp), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+        if (state.turns.lastOrNull().let { it is ProbeTurn.Assistant && it.status in setOf(ReplyStatus.INTERRUPTED, ReplyStatus.FAILED) }) {
+            TextButton(onClick = model::reviewLastQuestion, enabled = runtime.loaded && !state.isGenerating && !state.isHistoryBusy,
+                modifier = Modifier.padding(horizontal = 16.dp)) { Text(if (runtime.loaded) "Review last question to retry" else "Reload the model in Models to retry") }
+        }
         AnimatedVisibility(developer, enter = fadeIn(tween(if (reduced) 0 else 150)), exit = fadeOut(tween(if (reduced) 0 else 100))) {
             DeveloperPanel(state)
         }

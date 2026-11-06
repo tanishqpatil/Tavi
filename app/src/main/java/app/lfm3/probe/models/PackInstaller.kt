@@ -19,6 +19,9 @@ class PackInstaller(private val root: File, private val log: (String) -> Unit = 
     }.isSuccess
 
     suspend fun install(progress: (Long, Long) -> Unit) {
+        PackLease.acquire(root, pack, shared = false).use { installLocked(progress) }
+    }
+    private suspend fun installLocked(progress: (Long, Long) -> Unit) {
         root.mkdirs(); staging.mkdirs()
         val remaining = pack.artifacts.sumOf { (it.bytes - File(staging, it.name).length()).coerceAtLeast(0) }
         check(root.usableSpace >= remaining + 64L * 1024 * 1024) { "Not enough free storage for this model." }
@@ -44,6 +47,9 @@ class PackInstaller(private val root: File, private val log: (String) -> Unit = 
     }
 
     fun remove() {
+        PackLease.acquire(root, pack, shared = false).use { removeLocked() }
+    }
+    private fun removeLocked() {
         check(!installed.exists() || installed.deleteRecursively()) { "Unable to remove installed model." }
         check(!staging.exists() || staging.deleteRecursively()) { "Unable to remove partial model." }
     }

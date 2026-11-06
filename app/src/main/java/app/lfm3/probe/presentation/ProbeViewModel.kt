@@ -139,6 +139,17 @@ class ProbeViewModel(
     }
 
     fun reportError(message: String) = _state.update { it.copy(error = message) }
+    fun reviewLastQuestion() {
+        val state = _state.value
+        if (state.isGenerating || state.isHistoryBusy || state.isRecording || state.isImporting) return
+        val user = state.turns.filterIsInstance<ProbeTurn.User>().lastOrNull() ?: return
+        val images = user.media.filterIsInstance<RequestPart.Image>()
+        val audio = user.media.filterIsInstance<RequestPart.Audio>()
+        if (images.size > 1 || audio.size > 1) { reportError("This question has multiple attachments. Start a new question with the desired media."); return }
+        _state.update { it.copy(draft = user.text, photoAttached = images.isNotEmpty(), photoReference = images.firstOrNull()?.privateReference,
+            audioAttached = audio.isNotEmpty(), audioReference = audio.firstOrNull()?.privateReference, audioDurationMs = audio.firstOrNull()?.durationMs ?: 0,
+            error = "Question restored to the composer. Review it, then press Send when ready.") }
+    }
     fun importPhoto(uri: Uri) {
         if (_state.value.isGenerating || _state.value.isImporting || _state.value.isHistoryBusy) return
         _state.update { it.copy(isImporting = true, error = null) }
@@ -235,7 +246,14 @@ class ProbeViewModel(
             try {
                 // Commit user input before native execution; checkpoint partial output at bounded intervals.
                 checkpoint()
-                snapshots = launch { while (true) { delay(500); checkpoint() } }
+                snapshots = launch { while (true) {
+                    delay(500)
+                    try { checkpoint() }
+                    catch (_: Exception) {
+                        withContext(NonCancellable + Dispatchers.Main.immediate) { cancel(); reportError("History could not be saved. The response was stopped; check free storage before retrying.") }
+                        break
+                    }
+                } }
                 val full = if (repository != null && snapshot.totalTurns > snapshot.turns.size / 2) repository.load(snapshot.conversationId, 500)?.turns.orEmpty().filter { it.id != turnId } else snapshot.turns
                 val complete = full.filterIsInstance<ProbeTurn.Assistant>().filter { it.status == ReplyStatus.COMPLETE }.map { it.id }.toSet()
                 val history = full.filter { it.id in complete }.map {
@@ -251,14 +269,19 @@ class ProbeViewModel(
             } catch (_: CancellationException) {
                 // Cancellation is expected. A future native adapter must stop native work here too.
             } catch (e: Exception) {
-                if (activeTurnId == turnId) _state.update { it.copy(turns = markReply(it.turns, turnId, ReplyStatus.FAILED), error = if (e is IllegalStateException) e.message else "The response was interrupted. Please retry.") }
+                if (activeTurnId == turnId) _state.update { it.copy(turns = markReply(it.turns, turnId,
+                    if (e is app.lfm3.probe.inference.RuntimeDisconnectedException) ReplyStatus.INTERRUPTED else ReplyStatus.FAILED),
+                    error = if (e is IllegalStateException) e.message else "The response was interrupted. Please retry.") }
             } finally {
                 snapshots?.cancel()
                 if (activeTurnId == turnId) {
                     activeTurnId = null
                     _state.update { it.copy(isGenerating = false, turns = markReply(it.turns, turnId, ReplyStatus.INTERRUPTED, onlyStreaming = true)) }
                 }
-                withContext(NonCancellable) { runCatching { checkpoint(); refreshLibrary() } }
+                withContext(NonCancellable) {
+                    try { checkpoint(); refreshLibrary() }
+                    catch (_: Exception) { withContext(Dispatchers.Main.immediate) { reportError("Latest history changes could not be saved. Check free storage before closing Tavi.") } }
+                }
             }
         }
     }

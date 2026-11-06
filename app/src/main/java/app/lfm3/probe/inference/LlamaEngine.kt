@@ -24,10 +24,7 @@ class LlamaEngine(private val mediaStore: MediaStore? = null) : InferenceEngine 
         private set
     @Volatile private var pack: ModelPack = ModelCatalog.text
     private val playback = AudioPlayback()
-    override val descriptor get() = EngineDescriptor("llama.cpp v0.8.0 · ${pack.title} · CPU", pack.capabilities.map { when (it) {
-        ModelCapability.TEXT -> Capability.TEXT; ModelCapability.PHOTO -> Capability.IMAGE
-        ModelCapability.VOICE_INPUT -> Capability.AUDIO_INPUT; ModelCapability.VOICE_OUTPUT -> Capability.AUDIO_OUTPUT
-    } }.toSet(), EngineKind.LLAMA_CPP)
+    override val descriptor get() = InferenceWire.descriptor(pack)
     override fun prepare() = NativeLlama.prepare()
     override fun cancel() { NativeLlama.cancel(); playback.interrupt() }
 

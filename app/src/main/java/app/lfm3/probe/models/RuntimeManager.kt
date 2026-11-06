@@ -25,28 +25,35 @@ data class RuntimeState(
     val busy get() = phase in setOf(RuntimePhase.CHECKING, RuntimePhase.DOWNLOADING, RuntimePhase.LOADING)
 }
 
-class RuntimeManager(context: Context, media: app.lfm3.probe.media.MediaStore) {
+class RuntimeManager(context: Context) {
     private val preferences = app.lfm3.probe.ui.TaviSettings(context)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val log = AppLog(context)
     private val installers = ModelCatalog.packs.associate { it.id to PackInstaller(File(context.noBackupFilesDir, "models"), log::record, it) }
-    private val native = LlamaEngine(media)
     private val preview = DeterministicProbeEngine()
     private val _state = MutableStateFlow(RuntimeState())
     val state = _state.asStateFlow()
+    @Volatile private var nativeRequested = false
+    private val native = RemoteLlamaEngine(context) {
+        log.record("RUNTIME_PROCESS_DISCONNECTED")
+        _state.value = _state.value.copy(phase = RuntimePhase.ERROR, loadedId = null, loadedContext = 0,
+            message = "Runtime process stopped. Your history is safe. Tap Load model to recover; requests are not replayed.")
+    }
     private var task: Job? = null
     val engine = object : InferenceEngine {
-        override val descriptor get() = if (native.loaded) native.descriptor else preview.descriptor
-        override fun prepare(): Long = if (native.loaded) native.prepare() else 0
-        override fun cancel() { if (_state.value.nativeInfo != null) native.cancel() }
+        override val descriptor get() = if (native.loaded || nativeRequested) native.descriptor else preview.descriptor
+        override fun prepare(): Long = if (native.loaded || nativeRequested) native.prepare() else 0
+        override fun cancel() { native.cancel() }
         override suspend fun generate(request: InferenceRequest, emit: suspend (InferenceEvent) -> Unit) {
-            if (native.loaded) native.generate(request, emit) else preview.generate(request, emit)
+            if (native.loaded) native.generate(request, emit)
+            else if (nativeRequested) throw RuntimeDisconnectedException()
+            else preview.generate(request, emit)
         }
     }
     init {
         task = scope.launch {
             try {
-                val info = NativeLlama.info()
+                val info = native.info()
                 log.record("NATIVE_RUNTIME_INITIALIZED")
                 val valid = installers.filterValues { it.verifyInstalled() }.keys
                 _state.value = RuntimeState(if ("lfm3-text" in valid) RuntimePhase.INSTALLED else RuntimePhase.AVAILABLE,
@@ -80,14 +87,14 @@ class RuntimeManager(context: Context, media: app.lfm3.probe.media.MediaStore) {
     fun load() {
         if (task?.isActive == true || !_state.value.installed || native.loaded || native.generating) return
         val pack = _state.value.selected
+        nativeRequested = true
         val installer = installers.getValue(pack.id)
         task = scope.launch {
             try {
                 _state.value = _state.value.copy(phase = RuntimePhase.LOADING, message = "Verifying files and allocating model context…")
                 check(installer.verifyInstalled()) { "Installed pack failed verification. Remove and download again." }
                 val limits = preferences.limits
-                native.load(File(installer.installed, pack.weights.name).absolutePath, limits.context,
-                    pack.projector?.let { File(installer.installed, it.name).absolutePath } ?: "", pack)
+                native.load(pack, limits.context)
                 log.record("LFM3_MODEL_LOADED")
                 _state.value = _state.value.copy(phase = RuntimePhase.LOADED, loadedId = pack.id, loadedContext = limits.context,
                     message = "${pack.title} · CPU · ${limits.context}-token context${if (pack.experimental) " · Experimental" else ""}")
@@ -97,8 +104,11 @@ class RuntimeManager(context: Context, media: app.lfm3.probe.media.MediaStore) {
     fun unload() {
         if (task?.isActive == true || native.generating) return
         task = scope.launch {
-            native.unload(); log.record("LFM3_MODEL_UNLOADED")
-            _state.value = _state.value.copy(phase = RuntimePhase.INSTALLED, loadedId = null, loadedContext = 0, message = "Model unloaded. Native resources released.")
+            try {
+                native.unload(); log.record("LFM3_MODEL_UNLOADED")
+                nativeRequested = false
+                _state.value = _state.value.copy(phase = RuntimePhase.INSTALLED, loadedId = null, loadedContext = 0, message = "Model unloaded. Native resources released.")
+            } catch (e: Exception) { _state.value = _state.value.copy(phase = RuntimePhase.ERROR, message = safeError(e, "Unable to unload yet. Stop the response and retry.")) }
         }
     }
     fun remove() {

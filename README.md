@@ -40,7 +40,9 @@ Verified on the ARM64 API 36 emulator: in-app download with pause/restart/resume
 
 The separate interface preview remains available without a model. Conversations and input photo/voice attachments persist privately in no-backup storage. History supports title/message search, rename, confirmed deletion, and per-conversation ZIP export/restore through Android's file picker. New chat preserves the previous conversation; reopening does not automatically load a model or replay a recording. Streamed replies checkpoint approximately every 500 ms and finish with a completion/interruption status; interrupted replies remain visible and are excluded from follow-up prompts. Generated speech playback itself is not archived.
 
-History lists 30 conversations per page and initially opens the last 40 turns; older messages remain on disk and can be loaded. Follow-ups reconstruct completed turns from the stored conversation, subject to the model's context limits. Conversations are capped at 500 turns. Archives are unencrypted and contain private text/media: choose their destination carefully. Restore validates version, paths, sizes and attachment checksums, creates a separate conversation, and does not overwrite existing media. Archive limits: 500 turns, 64 attachments, 128 MiB of attachments and 4 MiB of metadata. A process crash can lose output since the most recent checkpoint. No physical-device tier, speech quality or real-time performance is qualified yet. Native inference currently runs in the app process, so a native failure may close the app.
+History lists 30 conversations per page and initially opens the last 40 turns; older messages remain on disk and can be loaded. Follow-ups reconstruct completed turns from the stored conversation, subject to the model's context limits. Conversations are capped at 500 turns. Archives are unencrypted and contain private text/media: choose their destination carefully. Restore validates version, paths, sizes and attachment checksums, creates a separate conversation, and does not overwrite existing media. Archive limits: 500 turns, 64 attachments, 128 MiB of attachments and 4 MiB of metadata. A process crash can lose output since the most recent checkpoint. No physical-device tier, speech quality or real-time performance is qualified yet.
+
+Native inference runs in a private, non-exported `:inference` service process. If that process dies, the UI stays available, marks the reply interrupted and retains its received text. Open **Models → Load model**, then use **Review last question to retry** and press Send when ready. Reload never automatically resends a question, photo or recording, and a failed native session never silently switches to preview output. Cancellation waits for remote shutdown; an unresponsive process is terminated. Model files are protected by OS-backed leases while mapped. This is crash containment, not a guarantee against Android terminating the whole app under memory pressure.
 
 ## Experimental phone testing
 
@@ -92,6 +94,17 @@ Real-model tests require installing the text pack through the app first. They ar
 
 ```sh
 ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=app.lfm3.probe.Lfm3DeviceTest -Pandroid.testInstrumentationRunnerArguments.runModelTest=true
+```
+
+For persistence/runtime tests while preserving an emulator's app data, build both APKs, update-install them with `adb install -r`, then run the test APK directly. Some connected-test tooling uninstalls the app afterward, which removes private chats and downloaded models.
+
+```sh
+./gradlew :app:assembleDebug :app:assembleDebugAndroidTest
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+adb shell am instrument -w -e class app.lfm3.probe.ConversationStorageTest app.lfm3.probe.test/androidx.test.runner.AndroidJUnitRunner
+# Opt-in: installed text weights required; kills only the private inference process.
+adb shell am instrument -w -e class app.lfm3.probe.RuntimeRecoveryTest -e runModelTest true app.lfm3.probe.test/androidx.test.runner.AndroidJUnitRunner
 ```
 
 Internal planning and validation notes are kept locally in the ignored `docs/` directory. No model weights, private media, local SDK paths, build outputs, or signing keys belong in commits. LFM model weights have their own license, separate from application source.
