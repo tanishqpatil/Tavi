@@ -39,6 +39,7 @@ import java.util.UUID
 import app.lfm3.probe.models.ModelCapability
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -96,16 +97,9 @@ fun TaviApp(
     LaunchedEffect(page) { if (page == Page.HISTORY) model.refreshHistory() }
     var showPreview by rememberSaveable { mutableStateOf(false) }
     var clearConfirmation by remember { mutableStateOf(false) }
+    var navigationExpanded by remember { mutableStateOf(false) }
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
-        bottomBar = {
-            NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainerLow, tonalElevation = 0.dp) {
-                Page.entries.forEach { destination ->
-                    NavigationBarItem(selected = destination == page, onClick = { page = destination },
-                        icon = { Glyph(destination.icon) }, label = { Text(destination.title) })
-                }
-            }
-        },
     ) { insets ->
         Column(Modifier.padding(insets).consumeWindowInsets(insets).imePadding().fillMaxSize().widthIn(max = 840.dp)) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -115,7 +109,21 @@ fun TaviApp(
                 Spacer(Modifier.weight(1f))
                 if (page == Page.CHAT) {
                     IconButton(onClick = { clearConfirmation = true }, enabled = state.turns.isNotEmpty() && !state.isHistoryBusy) { Glyph("plus", description = "New chat") }
-                } else Text("ON YOUR DEVICE", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else Text(page.title, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Box {
+                    IconButton(onClick = { navigationExpanded = true }) { Glyph("more", description = "Navigation menu") }
+                    DropdownMenu(expanded = navigationExpanded, onDismissRequest = { navigationExpanded = false }) {
+                        Page.entries.forEach { destination ->
+                            DropdownMenuItem(
+                                text = { Text(destination.title) },
+                                leadingIcon = { Glyph(destination.icon) },
+                                trailingIcon = if (destination == page) ({ Text("Current", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary) }) else null,
+                                modifier = Modifier.semantics { selected = destination == page },
+                                onClick = { navigationExpanded = false; page = destination },
+                            )
+                        }
+                    }
+                }
             }
             Crossfade(page, animationSpec = tween(if (reduceMotion) 0 else 180), label = "page") { target ->
                 when (target) {
@@ -502,6 +510,7 @@ private fun Glyph(kind: String, modifier: Modifier = Modifier, tint: Color = Loc
                 "arrow" -> { line(5f,12f,19f,12f); line(13f,6f,19f,12f); line(19f,12f,13f,18f) }
                 "plus" -> { line(5f,12f,19f,12f); line(12f,5f,12f,19f) }
                 "minus" -> line(5f,12f,19f,12f)
+                "more" -> { listOf(5f, 12f, 19f).forEach { y -> drawCircle(tint, 1.7f, androidx.compose.ui.geometry.Offset(12f, y)) } }
                 "stop" -> { path.moveTo(7f,7f); path.lineTo(17f,7f); path.lineTo(17f,17f); path.lineTo(7f,17f); path.close() }
                 "photo" -> { path.moveTo(4f,4f); path.lineTo(20f,4f); path.lineTo(20f,20f); path.lineTo(4f,20f); path.close(); line(4f,17f,10f,11f); line(10f,11f,15f,16f); line(15f,16f,18f,13f); line(18f,13f,20f,15f); drawCircle(tint, 1.5f, androidx.compose.ui.geometry.Offset(15f,8f)) }
                 "voice" -> { line(12f,4f,12f,14f); line(8f,8f,8f,15f); line(16f,8f,16f,15f); line(5f,11f,5f,13f); line(19f,11f,19f,13f); line(12f,18f,12f,20f) }

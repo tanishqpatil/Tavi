@@ -21,6 +21,8 @@ Total device RAM alone does not establish compatibility. No physical-phone perfo
 
 The Kotlin/Compose interface includes Chat, persistent History, Models, and Settings; light/dark/system themes; reduced motion; and an optional developer panel. The Tavi logo is generated artwork and is included as the app's launcher icon.
 
+Switch pages using the top-right **⋮** navigation menu. The bottom of the chat stays available for messages and the composer.
+
 Models offers resumable, immutable downloads for the following official packs. All required components and the model license must pass SHA-256 verification before activation; files are rechecked at startup and before load. Unload the active model before selecting another pack.
 
 Downloads use persistent user-initiated transfer jobs on Android 14+ and a foreground WorkManager fallback on Android 8–13. Choose **Unmetered networks only** or explicitly allow metered/mobile data in the license dialog. Progress and Pause controls are available in Models and the transfer notification; notification visibility depends on permission. Partial files and transfer intent survive process loss, and resumes validate HTTP ranges and final checksums. Temporary network errors retry with backoff; storage/integrity failures require attention. A model is never loaded automatically when its download finishes.
