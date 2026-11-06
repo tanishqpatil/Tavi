@@ -12,3 +12,6 @@ local.properties
 
 docs/
 app-logs/
+.cxx/
+**/.cxx/
+model-cache/

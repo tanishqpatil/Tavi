@@ -14,6 +14,7 @@ enum class PackStatus { NOT_CATALOGED, READY_TO_DOWNLOAD, DOWNLOADING, INSTALLED
 
 object ModelCatalog {
     val packs = listOf(
+        ModelPack("lfm3-text", "LFM3 Text 1.7B", setOf(ModelCapability.TEXT), PackStatus.READY_TO_DOWNLOAD, "Q4_K_M · 1.10 GB · LFM Open License v1.0"),
         ModelPack("lfm3-omni", "LFM3 Omni 2B", ModelCapability.entries.toSet(), PackStatus.NOT_CATALOGED, "Artifact manifest is not yet pinned and verified."),
         ModelPack("lfm3-vl", "LFM3 VL 2B", setOf(ModelCapability.TEXT, ModelCapability.PHOTO), PackStatus.NOT_CATALOGED, "Artifact manifest is not yet pinned and verified."),
         ModelPack("lfm3-audio", "LFM3 Audio 2B", setOf(ModelCapability.TEXT, ModelCapability.VOICE_INPUT, ModelCapability.VOICE_OUTPUT), PackStatus.NOT_CATALOGED, "Artifact manifest is not yet pinned and verified."),

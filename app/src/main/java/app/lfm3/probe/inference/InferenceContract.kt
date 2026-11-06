@@ -6,6 +6,8 @@ package app.lfm3.probe.inference
  */
 interface InferenceEngine {
     val descriptor: EngineDescriptor
+    fun prepare(): Long = 0
+    fun cancel() {}
 
     suspend fun generate(request: InferenceRequest, emit: suspend (InferenceEvent) -> Unit)
 }
@@ -23,7 +25,11 @@ enum class Capability { TEXT, IMAGE, AUDIO_INPUT, AUDIO_OUTPUT }
 data class InferenceRequest(
     val turnId: Long,
     val parts: List<RequestPart>,
+    val history: List<ChatMessage> = emptyList(),
+    val generationTicket: Long = 0,
 )
+
+data class ChatMessage(val role: String, val text: String)
 
 sealed interface RequestPart {
     data class Text(val value: String) : RequestPart
@@ -37,6 +43,6 @@ sealed interface InferenceEvent {
     /** Exact output-token count and decode duration reported by the runtime, never word estimates. */
     data class Usage(val turnId: Long, val outputTokens: Int, val decodeNanos: Long) : InferenceEvent
     data class TextDelta(val turnId: Long, val value: String) : InferenceEvent
-    data class Completed(val turnId: Long) : InferenceEvent
+    data class Completed(val turnId: Long, val outputLimitReached: Boolean = false) : InferenceEvent
     data class Failed(val turnId: Long, val reason: String) : InferenceEvent
 }

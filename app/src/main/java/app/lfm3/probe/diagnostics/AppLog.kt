@@ -15,8 +15,15 @@ class AppLog(context: Context) {
     fun record(event: String) {
         require(event.matches(Regex("[A-Z0-9_. -]{1,120}"))) { "Diagnostic event contains unsupported data" }
         val line = "${Instant.now()} $event"
-        file.parentFile?.mkdirs()
-        file.appendText("$line\n")
+        // Diagnostics must never fail a load/download or grow without bound on disk.
+        synchronized(fileLock) {
+            runCatching {
+                file.parentFile?.mkdirs()
+                if (file.length() > 128 * 1024) file.writeText("")
+                file.appendText("$line\n")
+            }
+        }
         _entries.value = (_entries.value + line).takeLast(100)
     }
+    private companion object { val fileLock = Any() }
 }

@@ -11,6 +11,10 @@ import app.lfm3.probe.diagnostics.AppLog
 import app.lfm3.probe.ui.*
 
 class MainActivity : ComponentActivity() {
+    override fun onStop() {
+        (application as TaviApplication).runtime.pauseDownload()
+        super.onStop()
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         AppLog(applicationContext).record("APP_STARTED")

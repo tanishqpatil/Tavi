@@ -7,7 +7,10 @@ import app.lfm3.probe.inference.InferenceEngine
 import app.lfm3.probe.inference.InferenceEvent
 import app.lfm3.probe.inference.InferenceRequest
 import app.lfm3.probe.inference.RequestPart
+import app.lfm3.probe.inference.ChatMessage
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -24,10 +27,13 @@ class ProbeViewModel(
     private var nextTurnId = 1L
     private var activeTurnId: Long? = null
     private var startedAt = 0L
+    private val completedTurns = mutableSetOf<Long>()
 
     fun newChat() {
         cancel()
-        _state.value = ProbeUiState()
+        completedTurns.clear()
+        _state.value = ProbeUiState(engineName = engine.descriptor.id,
+            realInference = engine.descriptor.kind != app.lfm3.probe.inference.EngineKind.DETERMINISTIC_PROBE)
     }
 
     fun updateDraft(value: String) = _state.update { it.copy(draft = value.take(8_000)) }
@@ -55,18 +61,28 @@ class ProbeViewModel(
                 audioAttached = false,
                 isGenerating = true,
                 error = null,
-                trace = listOf("Request accepted", "Engine: deterministic preview", "Parts: ${requestParts.size}"),
+                trace = listOf("Request accepted", "Engine: ${engine.descriptor.id}", "Parts: ${requestParts.size}"),
+                engineName = engine.descriptor.id,
+                realInference = engine.descriptor.kind != app.lfm3.probe.inference.EngineKind.DETERMINISTIC_PROBE,
                 metrics = GenerationMetrics(),
             )
         }
+        completedTurns.retainAll(_state.value.turns.map { it.id }.toSet())
         activeTurnId = turnId
+        val generationTicket = engine.prepare()
         generation = viewModelScope.launch {
             try {
-                engine.generate(InferenceRequest(turnId, requestParts)) { event -> handleEvent(event) }
+                val history = snapshot.turns.filter { it.id in completedTurns }.map {
+                    when (it) {
+                        is ProbeTurn.User -> ChatMessage("user", it.text)
+                        is ProbeTurn.Assistant -> ChatMessage("assistant", it.text)
+                    }
+                }
+                engine.generate(InferenceRequest(turnId, requestParts, history, generationTicket)) { event -> withContext(Dispatchers.Main.immediate) { handleEvent(event) } }
             } catch (_: CancellationException) {
                 // Cancellation is expected. A future native adapter must stop native work here too.
-            } catch (_: Exception) {
-                if (activeTurnId == turnId) _state.update { it.copy(error = "The response was interrupted. Please retry.") }
+            } catch (e: Exception) {
+                if (activeTurnId == turnId) _state.update { it.copy(error = if (e is IllegalStateException) e.message else "The response was interrupted. Please retry.") }
             } finally {
                 if (activeTurnId == turnId) {
                     activeTurnId = null
@@ -77,6 +93,7 @@ class ProbeViewModel(
     }
 
     fun cancel() {
+        engine.cancel()
         activeTurnId = null // A late callback from a cancelled engine cannot alter a later turn.
         generation?.cancel()
         generation = null
@@ -103,8 +120,9 @@ class ProbeViewModel(
                 })
             }
             is InferenceEvent.Completed -> {
+                completedTurns += event.turnId
                 activeTurnId = null
-                _state.update { it.copy(isGenerating = false, trace = (it.trace + "Stream completed" + "Tokenizer usage: ${if (it.metrics.outputTokens == null) "unavailable" else "reported by runtime"}").takeLast(32)) }
+                _state.update { it.copy(isGenerating = false, error = if (event.outputLimitReached) "Response reached the 128-token experiment limit." else null, trace = (it.trace + "Stream completed" + "Tokenizer usage: ${if (it.metrics.outputTokens == null) "unavailable" else "reported by runtime"}").takeLast(32)) }
             }
             is InferenceEvent.Failed -> {
                 activeTurnId = null
@@ -123,6 +141,8 @@ data class ProbeUiState(
     val turns: List<ProbeTurn> = emptyList(),
     val metrics: GenerationMetrics = GenerationMetrics(),
     val trace: List<String> = emptyList(),
+    val engineName: String = "deterministic-preview",
+    val realInference: Boolean = false,
 )
 
 data class GenerationMetrics(val outputTokens: Int? = null, val decodeNanos: Long? = null, val firstTextMs: Long? = null) {
