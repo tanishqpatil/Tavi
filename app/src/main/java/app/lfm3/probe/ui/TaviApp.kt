@@ -74,7 +74,7 @@ fun TaviApp(
     val runtime = application.runtime
     val factory = remember(runtime) { object : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
-        override fun <T : ViewModel> create(modelClass: Class<T>): T = ProbeViewModel(runtime.engine, application.media) as T
+        override fun <T : ViewModel> create(modelClass: Class<T>): T = ProbeViewModel(runtime.engine, application.media, application.conversations, application.contentResolver) as T
     } }
     val model: ProbeViewModel = viewModel(factory = factory)
     SideEffect { model.outputLimit = limits.output }
@@ -92,8 +92,8 @@ fun TaviApp(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
-    LaunchedEffect(runtimeState.loaded) { model.newChat() }
     var page by rememberSaveable { mutableStateOf(Page.CHAT) }
+    LaunchedEffect(page) { if (page == Page.HISTORY) model.refreshHistory() }
     var showPreview by rememberSaveable { mutableStateOf(false) }
     var clearConfirmation by remember { mutableStateOf(false) }
     Scaffold(
@@ -114,7 +114,7 @@ fun TaviApp(
                 Text("Tavi", style = MaterialTheme.typography.titleLarge)
                 Spacer(Modifier.weight(1f))
                 if (page == Page.CHAT) {
-                    IconButton(onClick = { clearConfirmation = true }, enabled = state.turns.isNotEmpty()) { Glyph("plus", description = "New chat") }
+                    IconButton(onClick = { clearConfirmation = true }, enabled = state.turns.isNotEmpty() && !state.isHistoryBusy) { Glyph("plus", description = "New chat") }
                 } else Text("ON YOUR DEVICE", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Crossfade(page, animationSpec = tween(if (reduceMotion) 0 else 180), label = "page") { target ->
@@ -122,7 +122,7 @@ fun TaviApp(
                     Page.CHAT -> ChatPage(state, model, developer, reduceMotion, showPreview, runtimeState,
                         onModels = { page = Page.MODELS }, onPreview = { showPreview = true })
                     Page.MODELS -> ModelsPage(runtimeState, state.isGenerating || state.isRecording || state.isImporting, runtime::select, runtime::download, runtime::pauseDownload, runtime::load, runtime::unload, runtime::remove)
-                    Page.HISTORY -> HistoryPage(state, onOpen = { page = Page.CHAT }, onClear = { clearConfirmation = true })
+                    Page.HISTORY -> ConversationHistoryPage(state, model, onOpen = { page = Page.CHAT })
                     Page.SETTINGS -> SettingsPage(theme, developer, reduceMotion, onTheme, onDeveloper, onReduceMotion, limits, onLimits)
                 }
             }
@@ -130,7 +130,7 @@ fun TaviApp(
     }
     if (clearConfirmation) AlertDialog(
         onDismissRequest = { clearConfirmation = false }, title = { Text("Start fresh?") },
-        text = { Text("This clears the current preview conversation from memory and stops any response.") },
+        text = { Text("Your conversation stays saved in History. Any running response will stop.") },
         confirmButton = { TextButton(onClick = { model.newChat(); clearConfirmation = false; page = Page.CHAT }) { Text("New chat") } },
         dismissButton = { TextButton(onClick = { clearConfirmation = false }) { Text("Keep chatting") } },
     )
@@ -139,7 +139,8 @@ fun TaviApp(
 @Composable
 private fun ChatPage(state: ProbeUiState, model: ProbeViewModel, developer: Boolean, reduced: Boolean,
                      preview: Boolean, runtime: RuntimeState, onModels: () -> Unit, onPreview: () -> Unit) {
-    val canChat = runtime.loaded || preview
+    val viewingPreview = preview || (!state.realInference && state.turns.isNotEmpty())
+    val canChat = runtime.loaded || viewingPreview
     val context = LocalContext.current
     var photoMenu by remember { mutableStateOf(false) }
     var captureName by rememberSaveable { mutableStateOf<String?>(null) }
@@ -163,13 +164,15 @@ private fun ChatPage(state: ProbeUiState, model: ProbeViewModel, developer: Bool
             list.scrollToItem(state.turns.lastIndex)
     }
     Column(Modifier.fillMaxSize()) {
+        if (state.isHistoryBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
+        if (state.turns.isNotEmpty()) Text(state.conversationTitle, Modifier.padding(horizontal = 24.dp, vertical = 4.dp), style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Surface(onClick = onModels, modifier = Modifier.padding(horizontal = 24.dp).fillMaxWidth(),
             shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
             Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                 Glyph("models", tint = MaterialTheme.colorScheme.primary)
                 Column(Modifier.padding(start = 10.dp).weight(1f)) {
-                    Text(if (runtime.loaded) ModelCatalog.get(runtime.loadedId!!).title else if (preview) "UI preview" else "Choose your first model", style = MaterialTheme.typography.labelLarge)
-                    Text(if (runtime.loaded) runtime.message else if (preview) "Simulated responses · no model loaded" else "Get ready for local conversations", style = MaterialTheme.typography.bodySmall)
+                    Text(if (runtime.loaded) ModelCatalog.get(runtime.loadedId!!).title else if (viewingPreview) "UI preview" else "Choose your first model", style = MaterialTheme.typography.labelLarge)
+                    Text(if (runtime.loaded) runtime.message else if (viewingPreview) "Simulated responses · no model loaded" else "Get ready for local conversations", style = MaterialTheme.typography.bodySmall)
                 }
                 Glyph("arrow")
             }
@@ -195,6 +198,9 @@ private fun ChatPage(state: ProbeUiState, model: ProbeViewModel, developer: Bool
                 }
             }
         } else LazyColumn(Modifier.weight(1f), state = list, contentPadding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+            if (state.totalTurns > state.turns.size / 2) item {
+                TextButton(onClick = model::olderMessages, enabled = !state.isHistoryBusy && !state.isGenerating) { Text("Load older messages (${state.totalTurns} turns saved)") }
+            }
             items(state.turns, key = { "${it.id}-${it is ProbeTurn.User}" }) { turn ->
                 Message(turn, state.realInference, Modifier.then(if (reduced) Modifier else Modifier.animateItem()), state.isGenerating && turn.id == state.turns.lastOrNull()?.id)
             }
@@ -213,7 +219,7 @@ private fun ChatPage(state: ProbeUiState, model: ProbeViewModel, developer: Bool
                     if (state.isRecording) Text("Recording · tap microphone to finish · 30s maximum", Modifier.padding(8.dp), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                     if (state.isImporting) LinearProgressIndicator(Modifier.fillMaxWidth())
                     OutlinedTextField(state.draft, model::updateDraft, Modifier.fillMaxWidth(), placeholder = { Text("Ask Tavi anything…") },
-                        enabled = !state.isGenerating, maxLines = 4, shape = RoundedCornerShape(18.dp),
+                        enabled = !state.isGenerating && !state.isHistoryBusy, maxLines = 4, shape = RoundedCornerShape(18.dp),
                         colors = OutlinedTextFieldDefaults.colors(unfocusedBorderColor = Color.Transparent, focusedBorderColor = Color.Transparent))
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Box {
@@ -239,7 +245,7 @@ private fun ChatPage(state: ProbeUiState, model: ProbeViewModel, developer: Bool
                         Text(if (runtime.loaded) "Local · Text" else "Preview", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Spacer(Modifier.weight(1f))
                         FilledIconButton(onClick = if (state.isGenerating) model::cancel else model::submit,
-                            enabled = runtime.phase != RuntimePhase.LOADING && !state.isRecording && !state.isImporting && (state.isGenerating || state.draft.isNotBlank() || state.photoAttached || state.audioAttached)) { Glyph(if (state.isGenerating) "stop" else "arrow", description = if (state.isGenerating) "Stop response" else "Send message") }
+                            enabled = !state.isHistoryBusy && runtime.phase != RuntimePhase.LOADING && !state.isRecording && !state.isImporting && (state.isGenerating || state.draft.isNotBlank() || state.photoAttached || state.audioAttached)) { Glyph(if (state.isGenerating) "stop" else "arrow", description = if (state.isGenerating) "Stop response" else "Send message") }
                     }
                 }
             }
@@ -287,7 +293,10 @@ private fun Message(turn: ProbeTurn, real: Boolean, modifier: Modifier = Modifie
                                 if (expanded) Text(part.text, Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState()), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Light, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             } else Text(part.text, style = MaterialTheme.typography.bodyLarge)
                         }
-                        if (turn.text.isBlank()) Text("Preparing response…")
+                        if (turn.status == ReplyStatus.INTERRUPTED || turn.status == ReplyStatus.FAILED) Text(
+                            if (turn.status == ReplyStatus.INTERRUPTED) "Interrupted · partial reply saved" else "Response failed · excluded from follow-up context",
+                            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                        if (turn.text.isBlank() && turn.status == ReplyStatus.STREAMING) Text("Preparing response…")
                     }
                 } else Text((turn as ProbeTurn.User).text, Modifier.padding(16.dp), style = MaterialTheme.typography.bodyLarge)
             }
@@ -387,25 +396,6 @@ private fun ModelsPage(runtime: RuntimeState, generating: Boolean, select: (Stri
                     TextButton(onClick = { uri.openUri(pack.licensePage) }) { Text("License & source") }
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun HistoryPage(state: ProbeUiState, onOpen: () -> Unit, onClear: () -> Unit) {
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-        item { PageHeading("Your conversations", "Pick up a thought where you left it.") }
-        item { Text("History stays in this session. Persistent chat storage is being integrated.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        if (state.turns.isEmpty()) item { FeatureRow("history", "A fresh start", "Your current conversation will appear here.") }
-        else item {
-            Surface(onClick = onOpen, shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainerLow) {
-                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Eyebrow("CURRENT SESSION")
-                    Text(state.turns.filterIsInstance<ProbeTurn.User>().firstOrNull()?.text ?: "Conversation", maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
-                    Text("${state.turns.filterIsInstance<ProbeTurn.User>().size} turns · ${if (state.realInference) "Local LFM3" else "Interface preview"}", style = MaterialTheme.typography.bodySmall)
-                }
-            }
-            TextButton(onClick = onClear) { Text("Clear current conversation") }
         }
     }
 }

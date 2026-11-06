@@ -19,7 +19,7 @@ Total device RAM alone does not establish compatibility. No physical-phone perfo
 
 ## Current status
 
-The Kotlin/Compose interface includes Chat, session History, Models, and Settings; light/dark/system themes; reduced motion; and an optional developer panel. The Tavi logo is generated artwork and is included as the app's launcher icon.
+The Kotlin/Compose interface includes Chat, persistent History, Models, and Settings; light/dark/system themes; reduced motion; and an optional developer panel. The Tavi logo is generated artwork and is included as the app's launcher icon.
 
 Models offers resumable, immutable downloads for the following official packs. All required components and the model license must pass SHA-256 verification before activation; files are rechecked at startup and before load. Keep Tavi open during downloads; backgrounding pauses them. Unload the active model before selecting another pack.
 
@@ -38,7 +38,9 @@ Model-provided `<think>…</think>` sections appear in collapsed disclosures wit
 
 Verified on the ARM64 API 36 emulator: in-app download with pause/restart/resume, full checksums, offline text/follow-up/cancellation recovery/unload/reload, and a real response through the chat UI. This is experimental text-path evidence; it does not qualify photo/voice or physical-device performance.
 
-The separate interface preview remains available without a model. Persistent conversation storage remains unfinished: chat and media history are session-only, and private session media is cleared when a new app process initializes. No physical-device tier, speech quality or real-time performance is qualified yet. Native inference currently runs in the app process, so a native failure may close the app.
+The separate interface preview remains available without a model. Conversations and input photo/voice attachments persist privately in no-backup storage. History supports title/message search, rename, confirmed deletion, and per-conversation ZIP export/restore through Android's file picker. New chat preserves the previous conversation; reopening does not automatically load a model or replay a recording. Streamed replies checkpoint approximately every 500 ms and finish with a completion/interruption status; interrupted replies remain visible and are excluded from follow-up prompts. Generated speech playback itself is not archived.
+
+History lists 30 conversations per page and initially opens the last 40 turns; older messages remain on disk and can be loaded. Follow-ups reconstruct completed turns from the stored conversation, subject to the model's context limits. Conversations are capped at 500 turns. Archives are unencrypted and contain private text/media: choose their destination carefully. Restore validates version, paths, sizes and attachment checksums, creates a separate conversation, and does not overwrite existing media. Archive limits: 500 turns, 64 attachments, 128 MiB of attachments and 4 MiB of metadata. A process crash can lose output since the most recent checkpoint. No physical-device tier, speech quality or real-time performance is qualified yet. Native inference currently runs in the app process, so a native failure may close the app.
 
 ## Experimental phone testing
 
@@ -82,7 +84,7 @@ Debug APK: `app/build/outputs/apk/debug/app-debug.apk`.
 
 ## Development
 
-UI code is under `app/src/main/java/app/lfm3/probe/ui/`. The engine contract and adapter are under `inference/`; chat state is under `presentation/`. Theme, developer visibility, and reduced-motion preferences are stored privately on the device. Conversation content stays in memory; operational diagnostics exclude conversation payloads.
+UI code is under `app/src/main/java/app/lfm3/probe/ui/`. The engine contract and adapter are under `inference/`; chat state is under `presentation/`; transactional SQLite persistence and bounded archives are under `history/`. Theme, developer visibility, and reduced-motion preferences are stored privately on the device. Operational diagnostics exclude conversation payloads.
 
 llama.cpp revision: `8642541b255bfb5dc39cd351a178be09013a55d6` (MIT; native media notices included in app assets). Exact model revisions, sizes and checksums are in `ModelCatalog.kt` and `VerifiedArtifact.kt`. Model terms are linked in the download confirmation and included in each verified pack.
 

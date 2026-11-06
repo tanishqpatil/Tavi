@@ -13,21 +13,22 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
 
-/** Session attachments are normalized into private storage, never arbitrary paths or remote URLs. */
+/** Durable no-backup attachments, addressed only by app-generated tokens. */
 class MediaStore(private val context: Context) {
     val directory = File(context.noBackupFilesDir, "session-media").apply {
         mkdirs()
-        // Application singleton initializes once per process; previous in-memory sessions no longer exist.
-        listFiles()?.filter { it.isFile }?.forEach { it.delete() }
     }
     fun resolve(reference: String): File {
         require(reference.matches(Regex("[a-f0-9-]+\\.(jpg|wav)"))) { "Invalid private attachment reference." }
-        return File(directory, reference).also { check(it.isFile) { "A session attachment is missing. Start a new chat." } }
+        return File(directory, reference).also { check(it.isFile) { "An attachment is missing. Restore its backup or start a new chat." } }
     }
     fun newFile(extension: String): File {
-        check((directory.list()?.size ?: 0) < 64) { "Session attachment storage is full. Restart Tavi to clear old session media." }
+        require(extension == "jpg" || extension == "wav")
+        check(directory.usableSpace > 32L * 1024 * 1024 && (directory.list()?.size ?: 0) < 4096) { "Attachment storage is full. Delete unused conversations to free space." }
         return File(directory, "${UUID.randomUUID()}.$extension")
     }
+    /** Only call after the owning database mutation commits; never during capture/import. */
+    fun prune(retained: Set<String>) { directory.listFiles()?.filter { it.isFile && it.name !in retained }?.forEach { it.delete() } }
     suspend fun importPhoto(uri: Uri): String = withContext(Dispatchers.IO) {
         val raw = File.createTempFile("import", ".tmp", context.cacheDir)
         try {

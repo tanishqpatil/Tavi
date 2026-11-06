@@ -20,12 +20,20 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import app.lfm3.probe.history.*
+import android.content.ContentResolver
 
 class ProbeViewModel(
     private val engine: InferenceEngine = DeterministicProbeEngine(),
     private val mediaStore: MediaStore? = null,
+    private val repository: ConversationRepository? = null,
+    private val resolver: ContentResolver? = null,
 ) : ViewModel() {
-    private val _state = MutableStateFlow(ProbeUiState())
+    private val _state = MutableStateFlow(ProbeUiState(isHistoryBusy = repository != null))
     val state: StateFlow<ProbeUiState> = _state.asStateFlow()
     private var generation: Job? = null
     private var nextTurnId = 1L
@@ -37,10 +45,102 @@ class ProbeViewModel(
     private var recording: Job? = null
     private var importing: Job? = null
     private var chatEpoch = 0L
+    private val persistence = Mutex()
+    private var historyJob: Job? = null
+    private var searchJob: Job? = null
+    private var draftJob: Job? = null
+    private var cancellationSave: Job? = null
+    private val archive = if (repository != null && mediaStore != null) ConversationArchive(repository, mediaStore) else null
+
+    init {
+        if (repository != null) historyJob = viewModelScope.launch {
+            try {
+                repository.recoverInterrupted()
+                val retained = repository.references()
+                withContext(Dispatchers.IO) {
+                    mediaStore?.prune(retained)
+                    mediaStore?.directory?.parentFile?.listFiles()?.filter { it.isDirectory && it.name.startsWith("restore-") }?.forEach { it.deleteRecursively() }
+                }
+                refreshLibrary()
+                _state.value.library.firstOrNull()?.let { restore(it.id) }
+            } catch (_: Exception) { reportError("Unable to open saved history. Your files have not been erased.") }
+            finally { _state.update { it.copy(isHistoryBusy = false) } }
+        }
+    }
+
+    private suspend fun checkpoint(force: Boolean = false) {
+        val store = repository ?: return
+        persistence.withLock {
+            val state = _state.value
+            if (state.isHistoryBusy && !force) return@withLock
+            if (state.turns.isNotEmpty() || state.draft.isNotBlank()) store.save(SavedConversation(state.conversationId,
+                state.conversationTitle, state.turns, state.realInference, state.engineName, state.draft, state.speakReplies))
+        }
+    }
+    private suspend fun refreshLibrary(append: Boolean = false) {
+        val state = _state.value
+        val page = repository?.list(state.historyQuery, if (append) state.library.size else 0).orEmpty()
+        _state.update { it.copy(library = (if (append) it.library else emptyList()) + page, hasMoreConversations = page.size == 30) }
+    }
+    private suspend fun restore(id: String, limit: Int = 40) {
+        val saved = checkNotNull(repository?.load(id, limit)) { "Conversation no longer exists." }
+        completedTurns.clear()
+        completedTurns.addAll(saved.turns.filterIsInstance<ProbeTurn.Assistant>().filter { it.status == ReplyStatus.COMPLETE }.map { it.id })
+        nextTurnId = (saved.turns.maxOfOrNull { it.id } ?: 0) + 1
+        val count = repository.count(id)
+        _state.update { it.copy(conversationId = id, conversationTitle = saved.title, turns = saved.turns, draft = saved.draft,
+            realInference = saved.real, engineName = saved.engine, speakReplies = saved.speak, totalTurns = count,
+            error = if (saved.turns.any { turn -> turn is ProbeTurn.Assistant && turn.status == ReplyStatus.INTERRUPTED }) "An earlier response was interrupted. It was not replayed." else null,
+            metrics = GenerationMetrics(), trace = emptyList()) }
+    }
+    fun searchHistory(query: String) {
+        _state.update { it.copy(historyQuery = query.take(200)) }
+        searchJob?.cancel()
+        searchJob = viewModelScope.launch { delay(250); try { refreshLibrary() } catch (_: Exception) { reportError("Unable to search history.") } }
+    }
+    fun refreshHistory() = historyAction { checkpoint(true); refreshLibrary() }
+    fun moreConversations() = historyAction { refreshLibrary(true) }
+    fun olderMessages() = historyAction { checkpoint(true); restore(_state.value.conversationId, (_state.value.turns.size / 2 + 40).coerceAtMost(500)) }
+    fun openConversation(id: String) = historyAction(stop = true) { checkpoint(true); restore(id) }
+    fun renameConversation(id: String, title: String) = historyAction {
+        checkpoint(true); repository?.rename(id, title)
+        if (_state.value.conversationId == id) _state.update { it.copy(conversationTitle = title.trim()) }
+        refreshLibrary()
+    }
+    fun deleteConversation(id: String) = historyAction(stop = true) {
+        checkpoint(true); repository?.delete(id)
+        if (_state.value.conversationId == id) resetChat()
+        // Drafts/imports remain leased until their owner is stopped and the operation completes.
+        val keep = repository?.references().orEmpty() + listOfNotNull(_state.value.photoReference, _state.value.audioReference)
+        withContext(Dispatchers.IO) { mediaStore?.prune(keep) }
+        refreshLibrary()
+    }
+    fun exportConversation(id: String, uri: Uri) = historyAction {
+        checkpoint(true)
+        withContext(Dispatchers.IO) { checkNotNull(resolver?.openOutputStream(uri, "wt")).use { checkNotNull(archive).export(id, it) } }
+        reportError("Conversation exported. The archive includes its text and attachments; store it privately.")
+    }
+    fun restoreConversation(uri: Uri) = historyAction(stop = true) {
+        checkpoint(true)
+        val id = withContext(Dispatchers.IO) { checkNotNull(resolver?.openInputStream(uri)).use { checkNotNull(archive).restore(it) } }
+        restore(id); refreshLibrary()
+    }
+    private fun historyAction(stop: Boolean = false, block: suspend () -> Unit) {
+        if (historyJob?.isActive == true || _state.value.isImporting) return
+        val precedingGeneration = generation
+        if (stop) { ++chatEpoch; cancel(); stopRecording(true) }
+        else if (_state.value.isGenerating || _state.value.isRecording) return
+        _state.update { it.copy(isHistoryBusy = true) }
+        historyJob = viewModelScope.launch {
+            try { if (stop) { precedingGeneration?.join(); cancellationSave?.join(); recording?.join() }; block() }
+            catch (_: Exception) { reportError("History operation failed. Check storage or the archive and retry; existing conversations were retained.") }
+            finally { _state.update { it.copy(isHistoryBusy = false) } }
+        }
+    }
 
     fun reportError(message: String) = _state.update { it.copy(error = message) }
     fun importPhoto(uri: Uri) {
-        if (_state.value.isGenerating || _state.value.isImporting) return
+        if (_state.value.isGenerating || _state.value.isImporting || _state.value.isHistoryBusy) return
         _state.update { it.copy(isImporting = true, error = null) }
         val epoch = chatEpoch
         importing = viewModelScope.launch {
@@ -56,7 +156,7 @@ class ProbeViewModel(
     fun clearAudio() = _state.update { it.copy(audioAttached = false, audioReference = null, audioDurationMs = 0) }
     fun toggleSpeech() = _state.update { it.copy(speakReplies = !it.speakReplies) }
     fun startRecording() {
-        if (_state.value.isRecording || _state.value.isGenerating || recording?.isActive == true) return
+        if (_state.value.isRecording || _state.value.isGenerating || _state.value.isHistoryBusy || recording?.isActive == true) return
         val capture = recorder ?: return
         capture.prepare()
         _state.update { it.copy(isRecording = true, error = null) }
@@ -73,21 +173,37 @@ class ProbeViewModel(
     override fun onCleared() { engine.cancel(); stopRecording(true); super.onCleared() }
 
     fun newChat() {
+        if (repository != null) { historyAction(stop = true) { checkpoint(true); resetChat(); refreshLibrary() }; return }
+        resetChat()
+    }
+    private fun resetChat() {
         ++chatEpoch
         importing?.cancel()
         cancel()
         stopRecording(true)
         completedTurns.clear()
-        _state.value = ProbeUiState(engineName = engine.descriptor.id,
+        _state.value = ProbeUiState(isHistoryBusy = _state.value.isHistoryBusy, engineName = engine.descriptor.id,
             realInference = engine.descriptor.kind != app.lfm3.probe.inference.EngineKind.DETERMINISTIC_PROBE)
     }
 
-    fun updateDraft(value: String) = _state.update { it.copy(draft = value.take(8_000)) }
+    fun updateDraft(value: String) {
+        if (_state.value.isHistoryBusy) return
+        _state.update { it.copy(draft = value.take(8_000)) }
+        if (repository != null) {
+            draftJob?.cancel()
+            draftJob = viewModelScope.launch { delay(500); runCatching { checkpoint() }.onFailure { reportError("Unable to save draft. Check free storage.") } }
+        }
+    }
 
     fun submit() {
         val snapshot = _state.value
-        if (snapshot.isGenerating || snapshot.isRecording || snapshot.isImporting || (snapshot.draft.isBlank() && !snapshot.photoAttached && !snapshot.audioAttached)) return
+        if (snapshot.isGenerating || snapshot.isRecording || snapshot.isImporting || snapshot.isHistoryBusy || (snapshot.draft.isBlank() && !snapshot.photoAttached && !snapshot.audioAttached)) return
+        if (snapshot.totalTurns >= 500) { reportError("This conversation has reached 500 turns. Start a new chat; your history remains saved."); return }
+        if (snapshot.turns.isNotEmpty() && (snapshot.realInference != (engine.descriptor.kind != app.lfm3.probe.inference.EngineKind.DETERMINISTIC_PROBE) || (snapshot.realInference && snapshot.engineName != engine.descriptor.id))) {
+            reportError("Load this conversation's model, or start a new chat to use a different model/preview."); return
+        }
         val turnId = nextTurnId++
+        val epoch = chatEpoch
         startedAt = System.nanoTime()
         val requestParts = buildList {
             if (snapshot.draft.isNotBlank()) add(RequestPart.Text(snapshot.draft.trim()))
@@ -96,8 +212,9 @@ class ProbeViewModel(
         }
         _state.update {
             it.copy(
-                // Bound the preview session while durable, paginated history is being integrated.
-                turns = it.turns.takeLast(198) + ProbeTurn.User(turnId, snapshot.draft, snapshot.photoAttached, snapshot.audioAttached, requestParts.filterNot { part -> part is RequestPart.Text }) + ProbeTurn.Assistant(turnId, ""),
+                turns = it.turns + ProbeTurn.User(turnId, snapshot.draft, snapshot.photoAttached, snapshot.audioAttached, requestParts.filterNot { part -> part is RequestPart.Text }) + ProbeTurn.Assistant(turnId, ""),
+                totalTurns = it.totalTurns + 1,
+                conversationTitle = if (it.turns.isEmpty() && it.conversationTitle == "New conversation") snapshot.draft.trim().take(80).ifBlank { "Photo / voice conversation" } else it.conversationTitle,
                 draft = "",
                 photoAttached = false,
                 audioAttached = false,
@@ -114,34 +231,46 @@ class ProbeViewModel(
         activeTurnId = turnId
         val generationTicket = engine.prepare()
         generation = viewModelScope.launch {
+            var snapshots: Job? = null
             try {
-                val history = snapshot.turns.filter { it.id in completedTurns }.map {
+                // Commit user input before native execution; checkpoint partial output at bounded intervals.
+                checkpoint()
+                snapshots = launch { while (true) { delay(500); checkpoint() } }
+                val full = if (repository != null && snapshot.totalTurns > snapshot.turns.size / 2) repository.load(snapshot.conversationId, 500)?.turns.orEmpty().filter { it.id != turnId } else snapshot.turns
+                val complete = full.filterIsInstance<ProbeTurn.Assistant>().filter { it.status == ReplyStatus.COMPLETE }.map { it.id }.toSet()
+                val history = full.filter { it.id in complete }.map {
                     when (it) {
                         is ProbeTurn.User -> ChatMessage("user", it.text, it.media)
                         is ProbeTurn.Assistant -> ChatMessage("assistant", it.text)
                     }
                 }
                 engine.generate(InferenceRequest(turnId, requestParts, history, generationTicket, outputLimit,
-                    snapshot.speakReplies)) { event -> withContext(Dispatchers.Main.immediate) { handleEvent(event) } }
+                    snapshot.speakReplies)) { event -> withContext(Dispatchers.Main.immediate) {
+                        if (epoch == chatEpoch && _state.value.conversationId == snapshot.conversationId) handleEvent(event)
+                    } }
             } catch (_: CancellationException) {
                 // Cancellation is expected. A future native adapter must stop native work here too.
             } catch (e: Exception) {
-                if (activeTurnId == turnId) _state.update { it.copy(error = if (e is IllegalStateException) e.message else "The response was interrupted. Please retry.") }
+                if (activeTurnId == turnId) _state.update { it.copy(turns = markReply(it.turns, turnId, ReplyStatus.FAILED), error = if (e is IllegalStateException) e.message else "The response was interrupted. Please retry.") }
             } finally {
+                snapshots?.cancel()
                 if (activeTurnId == turnId) {
                     activeTurnId = null
-                    _state.update { it.copy(isGenerating = false) }
+                    _state.update { it.copy(isGenerating = false, turns = markReply(it.turns, turnId, ReplyStatus.INTERRUPTED, onlyStreaming = true)) }
                 }
+                withContext(NonCancellable) { runCatching { checkpoint(); refreshLibrary() } }
             }
         }
     }
 
     fun cancel() {
         engine.cancel()
+        val interrupted = activeTurnId
         activeTurnId = null // A late callback from a cancelled engine cannot alter a later turn.
         generation?.cancel()
-        generation = null
-        _state.update { it.copy(isGenerating = false, error = "Response stopped.", trace = (it.trace + "Cancellation acknowledged").takeLast(32)) }
+        _state.update { it.copy(isGenerating = false, turns = if (interrupted != null) markReply(it.turns, interrupted, ReplyStatus.INTERRUPTED) else it.turns,
+            error = if (interrupted != null) "Response stopped. Partial reply saved." else it.error, trace = (it.trace + "Cancellation acknowledged").takeLast(32)) }
+        if (repository != null && interrupted != null) cancellationSave = viewModelScope.launch { runCatching { checkpoint() } }
     }
 
     private fun handleEvent(event: InferenceEvent) {
@@ -152,6 +281,9 @@ class ProbeViewModel(
             is InferenceEvent.Failed -> event.turnId
         }
         if (eventTurnId != activeTurnId) return
+        if (event is InferenceEvent.TextDelta && (_state.value.turns.filterIsInstance<ProbeTurn.Assistant>().lastOrNull()?.text?.length ?: 0) + event.value.length > 32_768) {
+            cancel(); reportError("Reply exceeded the saved-message limit and was stopped. Partial output was retained."); return
+        }
         when (event) {
             is InferenceEvent.Usage -> {
                 if (event.outputTokens >= 0 && event.decodeNanos > 0) _state.update {
@@ -160,23 +292,33 @@ class ProbeViewModel(
             }
             is InferenceEvent.TextDelta -> _state.update { state ->
                 state.copy(metrics = state.metrics.copy(firstTextMs = state.metrics.firstTextMs ?: ((System.nanoTime() - startedAt) / 1_000_000)), turns = state.turns.map { turn ->
-                    if (turn is ProbeTurn.Assistant && turn.id == event.turnId) turn.copy(text = turn.text + event.value) else turn
+                    if (turn is ProbeTurn.Assistant && turn.id == event.turnId) turn.copy(text = (turn.text + event.value).take(32_768)) else turn
                 })
             }
             is InferenceEvent.Completed -> {
                 completedTurns += event.turnId
                 activeTurnId = null
-                _state.update { it.copy(isGenerating = false, error = if (event.outputLimitReached) "Response reached the configured output-token limit." else null, trace = (it.trace + "Stream completed" + "Tokenizer usage: ${if (it.metrics.outputTokens == null) "unavailable" else "reported by runtime"}").takeLast(32)) }
+                _state.update { it.copy(isGenerating = false, turns = markReply(it.turns, event.turnId, ReplyStatus.COMPLETE), error = if (event.outputLimitReached) "Response reached the configured output-token limit." else null, trace = (it.trace + "Stream completed" + "Tokenizer usage: ${if (it.metrics.outputTokens == null) "unavailable" else "reported by runtime"}").takeLast(32)) }
             }
             is InferenceEvent.Failed -> {
                 activeTurnId = null
-                _state.update { it.copy(isGenerating = false, error = event.reason) }
+                _state.update { it.copy(isGenerating = false, turns = markReply(it.turns, event.turnId, ReplyStatus.FAILED), error = event.reason) }
             }
         }
+    }
+    private fun markReply(turns: List<ProbeTurn>, id: Long, status: ReplyStatus, onlyStreaming: Boolean = false) = turns.map {
+        if (it is ProbeTurn.Assistant && it.id == id && (!onlyStreaming || it.status == ReplyStatus.STREAMING)) it.copy(status = status) else it
     }
 }
 
 data class ProbeUiState(
+    val conversationId: String = java.util.UUID.randomUUID().toString(),
+    val conversationTitle: String = "New conversation",
+    val library: List<ConversationSummary> = emptyList(),
+    val historyQuery: String = "",
+    val hasMoreConversations: Boolean = false,
+    val isHistoryBusy: Boolean = false,
+    val totalTurns: Int = 0,
     val draft: String = "",
     val photoAttached: Boolean = false,
     val audioAttached: Boolean = false,
@@ -199,6 +341,8 @@ data class GenerationMetrics(val outputTokens: Int? = null, val decodeNanos: Lon
     val tokensPerSecond: Double? get() = if (outputTokens != null && decodeNanos != null && decodeNanos > 0) outputTokens * 1_000_000_000.0 / decodeNanos else null
 }
 
+enum class ReplyStatus { STREAMING, COMPLETE, INTERRUPTED, FAILED }
+
 sealed interface ProbeTurn {
     val id: Long
 
@@ -210,5 +354,5 @@ sealed interface ProbeTurn {
         val media: List<RequestPart> = emptyList(),
     ) : ProbeTurn
 
-    data class Assistant(override val id: Long, val text: String) : ProbeTurn
+    data class Assistant(override val id: Long, val text: String, val status: ReplyStatus = ReplyStatus.STREAMING) : ProbeTurn
 }
