@@ -19,7 +19,7 @@ import java.text.DateFormat
 import java.util.Date
 
 @Composable
-internal fun ConversationHistoryPage(state: ProbeUiState, model: ProbeViewModel, onOpen: () -> Unit) {
+internal fun ConversationHistoryPage(state: ProbeUiState, model: ProbeViewModel, onOpen: (Boolean) -> Unit) {
     var selected by remember { mutableStateOf<ConversationSummary?>(null) }
     var deleting by remember { mutableStateOf<ConversationSummary?>(null) }
     var title by remember { mutableStateOf("") }
@@ -48,7 +48,7 @@ internal fun ConversationHistoryPage(state: ProbeUiState, model: ProbeViewModel,
                     Text(chat.title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Text("${chat.count} turns · ${if (chat.real) "Local model" else "Interface preview"} · ${DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(chat.updated))}", style = MaterialTheme.typography.bodySmall)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(onClick = { model.openConversation(chat.id); onOpen() }, enabled = enabled) { Text("Open") }
+                        TextButton(onClick = { model.openConversation(chat.id); onOpen(chat.real) }, enabled = enabled) { Text("Open") }
                         TextButton(onClick = { selected = chat; title = chat.title }, enabled = enabled) { Text("Rename") }
                         TextButton(onClick = { exporting = chat.id; save.launch("Tavi-conversation.zip") }, enabled = enabled && chat.count > 0) { Text("Export") }
                         TextButton(onClick = { deleting = chat }, enabled = enabled) { Text("Delete") }

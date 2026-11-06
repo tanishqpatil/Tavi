@@ -11,9 +11,9 @@ import app.lfm3.probe.diagnostics.AppLog
 import app.lfm3.probe.ui.*
 
 class MainActivity : ComponentActivity() {
-    override fun onStop() {
-        (application as TaviApplication).runtime.pauseDownload()
-        super.onStop()
+    override fun onStart() {
+        super.onStart()
+        (application as TaviApplication).downloads.reconcile()
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

@@ -7,12 +7,14 @@ import java.io.RandomAccessFile
 import java.net.URL
 import javax.net.ssl.HttpsURLConnection
 
-/** Foreground-only P1 installer. Interrupted transfers retain immutable partial files for retry. */
-class PackInstaller(private val root: File, private val log: (String) -> Unit = {}, val pack: ModelPack = ModelCatalog.text) {
+/** Scheduler-independent verified installer. Interrupted transfers retain immutable partial files. */
+class PackInstaller(private val root: File, private val log: (String) -> Unit = {}, val pack: ModelPack = ModelCatalog.text,
+    private val open: (URL) -> HttpsURLConnection = { it.openConnection() as HttpsURLConnection }) {
     @Volatile private var connection: HttpsURLConnection? = null
     val installed = File(root, pack.directory)
     private val staging = File(root, "${pack.directory}.staging")
     fun interrupt() { connection?.disconnect() }
+    fun partialBytes(): Long = pack.artifacts.sumOf { File(if (installed.exists()) installed else staging, it.name).length().coerceAtMost(it.bytes) }
 
     fun verifyInstalled(): Boolean = installed.isDirectory && runCatching {
         pack.artifacts.forEach { it.verify(File(installed, it.name)) }
@@ -62,7 +64,7 @@ class PackInstaller(private val root: File, private val log: (String) -> Unit = 
             while (true) {
                 currentCoroutineContext().ensureActive()
                 check(url.protocol == "https" && allowedHost(url.host)) { "Unapproved download redirect." }
-                val conn = url.openConnection() as HttpsURLConnection
+                val conn = open(url)
                 connection = conn
                 conn.instanceFollowRedirects = false
                 conn.connectTimeout = 20_000; conn.readTimeout = 20_000
@@ -74,7 +76,7 @@ class PackInstaller(private val root: File, private val log: (String) -> Unit = 
                     conn.disconnect(); check(++hops <= 6) { "Too many download redirects." }
                     url = URL(url, location); continue
                 }
-                check(code == 200 || code == 206) { "Model host returned HTTP $code. Retry later." }
+                if (code != 200 && code != 206) throw DownloadHttpException(code)
                 log("DOWNLOAD_HTTP_${code}_OFFSET_$offset")
                 if (code == 206) {
                     val range = Regex("bytes (\\d+)-(\\d+)/(\\d+)").matchEntire(conn.getHeaderField("Content-Range") ?: "") ?: error("Invalid resume response.")
@@ -83,6 +85,7 @@ class PackInstaller(private val root: File, private val log: (String) -> Unit = 
                 val length = conn.contentLengthLong
                 check(length < 0 || length == artifact.bytes - offset) { "Unexpected download size." }
                 RandomAccessFile(file, "rw").use { output ->
+                    try {
                     output.setLength(offset); output.seek(offset)
                     conn.inputStream.buffered().use { input ->
                         val buffer = ByteArray(256 * 1024)
@@ -96,12 +99,17 @@ class PackInstaller(private val root: File, private val log: (String) -> Unit = 
                             if (System.nanoTime() - reportedAt > 200_000_000) { progress(offset, artifact.bytes); reportedAt = System.nanoTime() }
                         }
                     }
-                    output.fd.sync()
+                    } finally { output.fd.sync() }
                 }
+                if (offset != artifact.bytes) throw java.io.EOFException("Transfer ended before the artifact was complete.")
                 break
             }
         } finally { connection?.disconnect(); connection = null }
     }
 
     private fun allowedHost(host: String): Boolean = host == "huggingface.co" || host.endsWith(".huggingface.co") || host.endsWith(".hf.co")
+}
+
+internal class DownloadHttpException(val code: Int) : java.io.IOException("Model host returned HTTP $code.") {
+    val retryable get() = code == 408 || code == 429 || code in 500..599
 }

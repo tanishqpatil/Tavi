@@ -11,7 +11,7 @@ Built with Kotlin, Jetpack Compose and an embedded llama.cpp/libmtmd runtime. No
 ## Try it
 
 1. Download a development APK from [GitHub Actions](https://github.com/tanishqpatil/Tavi/actions/workflows/android.yml), or build it locally, and install it on an ARM64 Android device (Android 8 or newer).
-2. Open **Models**, read the model license, and download LFM3 Text 1.7B. Keep Tavi open during the transfer.
+2. Open **Models**, read the model license, and download LFM3 Text 1.7B. Downloads continue in the background; by default they wait for an unmetered network.
 3. Tap **Load model**, then open **Chat**. Model files stay on your device.
 4. Enable **Settings → Developer view** for output-token counts, decode speed and first-text timing.
 
@@ -21,7 +21,11 @@ Total device RAM alone does not establish compatibility. No physical-phone perfo
 
 The Kotlin/Compose interface includes Chat, persistent History, Models, and Settings; light/dark/system themes; reduced motion; and an optional developer panel. The Tavi logo is generated artwork and is included as the app's launcher icon.
 
-Models offers resumable, immutable downloads for the following official packs. All required components and the model license must pass SHA-256 verification before activation; files are rechecked at startup and before load. Keep Tavi open during downloads; backgrounding pauses them. Unload the active model before selecting another pack.
+Models offers resumable, immutable downloads for the following official packs. All required components and the model license must pass SHA-256 verification before activation; files are rechecked at startup and before load. Unload the active model before selecting another pack.
+
+Downloads use persistent user-initiated transfer jobs on Android 14+ and a foreground WorkManager fallback on Android 8–13. Choose **Unmetered networks only** or explicitly allow metered/mobile data in the license dialog. Progress and Pause controls are available in Models and the transfer notification; notification visibility depends on permission. Partial files and transfer intent survive process loss, and resumes validate HTTP ranges and final checksums. Temporary network errors retry with backoff; storage/integrity failures require attention. A model is never loaded automatically when its download finishes.
+
+Android controls scheduling and may defer a transfer after reboot, until unlock/app use, or under system restrictions. On Android 14+, a force-stop clears the scheduled job; reopening shows it paused until you resume. On Android 8–13, WorkManager may reschedule unfinished work when the app is opened; using Pause explicitly preserves the paused intent. Do not expect downloads to bypass Android force-stop, network, battery or thermal restrictions.
 
 | Pack | Approximate download | Intended capabilities | Validation |
 | --- | --- | --- | --- |
@@ -36,7 +40,7 @@ Each pack uses its own Q4_K_M language weights, matching Q8_0 multimodal compone
 
 Model-provided `<think>…</think>` sections appear in collapsed disclosures with lighter typography. Partial streaming tags are handled without displaying tag fragments. Tavi does not invent a thought trace when the model does not emit one.
 
-Verified on the ARM64 API 36 emulator: in-app download with pause/restart/resume, full checksums, offline text/follow-up/cancellation recovery/unload/reload, and a real response through the chat UI. This is experimental text-path evidence; it does not qualify photo/voice or physical-device performance.
+Verified on the ARM64 API 36 emulator: full text-pack checksums, real text/follow-up/cancellation recovery/unload/reload, runtime-process death during generation with partial-history recovery, background/screen-off download completion, pause/resume, and persisted job/partial recovery across reboot. Force-stop retained the partial transfer and required explicit resume on reopening. Reboot recovery was deferred by Android's standby/quota state until unlock/app use. This does not qualify photo/voice or physical-device performance; the Android 8–13 transfer fallback is build-checked and still needs its own device/OS validation.
 
 The separate interface preview remains available without a model. Conversations and input photo/voice attachments persist privately in no-backup storage. History supports title/message search, rename, confirmed deletion, and per-conversation ZIP export/restore through Android's file picker. New chat preserves the previous conversation; reopening does not automatically load a model or replay a recording. Streamed replies checkpoint approximately every 500 ms and finish with a completion/interruption status; interrupted replies remain visible and are excluded from follow-up prompts. Generated speech playback itself is not archived.
 
@@ -90,13 +94,7 @@ UI code is under `app/src/main/java/app/lfm3/probe/ui/`. The engine contract and
 
 llama.cpp revision: `8642541b255bfb5dc39cd351a178be09013a55d6` (MIT; native media notices included in app assets). Exact model revisions, sizes and checksums are in `ModelCatalog.kt` and `VerifiedArtifact.kt`. Model terms are linked in the download confirmation and included in each verified pack.
 
-Real-model tests require installing the text pack through the app first. They are opt-in and do not download weights in CI:
-
-```sh
-./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=app.lfm3.probe.Lfm3DeviceTest -Pandroid.testInstrumentationRunnerArguments.runModelTest=true
-```
-
-For persistence/runtime tests while preserving an emulator's app data, build both APKs, update-install them with `adb install -r`, then run the test APK directly. Some connected-test tooling uninstalls the app afterward, which removes private chats and downloaded models.
+Device tests are opt-in; real-model tests require the text pack installed through the app first. Build both APKs, update-install them with `adb install -r`, then invoke the runner directly to preserve app data. Some connected-test tooling uninstalls the app afterward, removing private chats and downloaded models. CI runs JVM tests and compiles device tests without downloading weights.
 
 ```sh
 ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest
@@ -106,6 +104,8 @@ adb shell am instrument -w -e class app.lfm3.probe.ConversationStorageTest app.l
 # Opt-in: installed text weights required; kills only the private inference process.
 adb shell am instrument -w -e class app.lfm3.probe.RuntimeRecoveryTest -e runModelTest true app.lfm3.probe.test/androidx.test.runner.AndroidJUnitRunner
 ```
+
+`BackgroundDownloadTest` with `runDownloadTest=true` is a separate development-device test: it truncates/re-downloads part of the verified text pack, tests notification pause/resume, and temporarily backgrounds the app and turns the screen off. Do not run it against a device/session whose current state you need to preserve. Manual restart-test flags are explicitly guarded in its source.
 
 Internal planning and validation notes are kept locally in the ignored `docs/` directory. No model weights, private media, local SDK paths, build outputs, or signing keys belong in commits. LFM model weights have their own license, separate from application source.
 

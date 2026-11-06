@@ -13,6 +13,11 @@ data class ModelPack(
     val artifacts get() = listOfNotNull(weights, projector, license)
     val bytes get() = artifacts.sumOf { it.bytes }
     val directory get() = "${if (id == "lfm3-text") "text" else id}-$revision"
+    /** A resumed job cannot silently adopt different quantization/components at the same revision. */
+    val fingerprint: String by lazy {
+        val manifest = "$id:$revision:" + artifacts.joinToString(";") { "${it.name}:${it.bytes}:${it.sha256}" }
+        java.security.MessageDigest.getInstance("SHA-256").digest(manifest.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+    }
     val licensePage get() = license.url.replace("/resolve/", "/blob/")
     val experimental get() = projector != null
 }

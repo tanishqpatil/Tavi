@@ -5,6 +5,9 @@ import android.content.Context
 /** Small preferences only. Conversation content and diagnostics never enter this store. */
 class TaviSettings(context: Context) {
     private val preferences = context.getSharedPreferences("tavi_settings", Context.MODE_PRIVATE)
+    var unmeteredDownloads: Boolean
+        get() = preferences.getBoolean("unmetered_downloads", true)
+        set(value) { preferences.edit().putBoolean("unmetered_downloads", value).apply() }
     var limits: app.lfm3.probe.inference.GenerationLimits
         get() = runCatching { app.lfm3.probe.inference.GenerationLimits(preferences.getInt("context", 1024), preferences.getInt("output", 128)) }.getOrDefault(app.lfm3.probe.inference.GenerationLimits())
         set(value) { preferences.edit().putInt("context", value.context).putInt("output", value.output).apply() }

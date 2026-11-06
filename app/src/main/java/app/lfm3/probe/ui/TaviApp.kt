@@ -120,9 +120,9 @@ fun TaviApp(
             Crossfade(page, animationSpec = tween(if (reduceMotion) 0 else 180), label = "page") { target ->
                 when (target) {
                     Page.CHAT -> ChatPage(state, model, developer, reduceMotion, showPreview, runtimeState,
-                        onModels = { page = Page.MODELS }, onPreview = { showPreview = true })
-                    Page.MODELS -> ModelsPage(runtimeState, state.isGenerating || state.isRecording || state.isImporting, runtime::select, runtime::download, runtime::pauseDownload, runtime::load, runtime::unload, runtime::remove)
-                    Page.HISTORY -> ConversationHistoryPage(state, model, onOpen = { page = Page.CHAT })
+                        onModels = { page = Page.MODELS }, onPreview = { runtime.usePreview(); model.newChat(); showPreview = true })
+                    Page.MODELS -> ModelsPage(runtimeState, state.isGenerating || state.isRecording || state.isImporting, runtime::select, runtime::download, runtime::pauseDownload, runtime::load, runtime::unload, runtime::remove, runtime::unmeteredDownloads)
+                    Page.HISTORY -> ConversationHistoryPage(state, model, onOpen = { real -> if (!real && !runtimeState.loaded) runtime.usePreview(); page = Page.CHAT })
                     Page.SETTINGS -> SettingsPage(theme, developer, reduceMotion, onTheme, onDeveloper, onReduceMotion, limits, onLimits)
                 }
             }
@@ -342,18 +342,30 @@ private fun DeveloperPanel(state: ProbeUiState) {
 
 @Composable
 private fun ModelsPage(runtime: RuntimeState, generating: Boolean, select: (String) -> Unit, download: () -> Unit,
-                       pause: () -> Unit, load: () -> Unit, unload: () -> Unit, remove: () -> Unit) {
+                       pause: () -> Unit, load: () -> Unit, unload: () -> Unit, remove: () -> Unit, unmetered: (Boolean) -> Unit) {
     var consent by remember { mutableStateOf(false) }
     var removal by remember { mutableStateOf(false) }
     val uri = LocalUriHandler.current
     val selected = runtime.selected
+    val context = LocalContext.current
+    val notifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { download() }
     if (consent) AlertDialog(onDismissRequest = { consent = false }, title = { Text("Download ${selected.title}?") },
         text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("${selected.bytes / 1_000_000} MB · Q4_K_M weights${if (selected.projector != null) " + matching Q8_0 component" else ""}\nLFM Open License v1.0\n\nKeep Tavi open. All components must verify before loading.")
+            Text("${selected.bytes / 1_000_000} MB · Q4_K_M weights${if (selected.projector != null) " + matching Q8_0 component" else ""}\nLFM Open License v1.0\n\nDownloads continue in the background with progress and Pause controls. All components must verify before loading.")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(runtime.unmeteredDownloads, unmetered)
+                Text("Unmetered networks only", style = MaterialTheme.typography.bodyMedium)
+            }
+            Text(if (runtime.unmeteredDownloads) "Waits for an unmetered connection; this can include Wi-Fi or Ethernet." else "Metered/mobile data is allowed. Model packs are large.", style = MaterialTheme.typography.bodySmall)
             if (selected.experimental) Text("Experimental: camera, vision and voice require phone testing. No performance guarantee.", color = MaterialTheme.colorScheme.error)
             TextButton(onClick = { uri.openUri(selected.licensePage) }) { Text("Read model license") }
         } },
-        confirmButton = { TextButton(onClick = { consent = false; download() }) { Text("Accept & download") } },
+        confirmButton = { TextButton(onClick = {
+            consent = false
+            if (android.os.Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+                notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+            else download()
+        }) { Text("Accept & download") } },
         dismissButton = { TextButton(onClick = { consent = false }) { Text("Cancel") } })
     if (removal) AlertDialog(onDismissRequest = { removal = false }, title = { Text("Remove ${selected.title}?") },
         text = { Text("Removes this pack and its partial files. You can download it again.") },
@@ -388,12 +400,12 @@ private fun ModelsPage(runtime: RuntimeState, generating: Boolean, select: (Stri
                             runtime.phase == RuntimePhase.DOWNLOADING -> {
                                 LinearProgressIndicator(progress = { (runtime.downloaded.toFloat() / pack.bytes).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
                                 Text("${runtime.downloaded / 1_000_000} / ${pack.bytes / 1_000_000} MB", style = MaterialTheme.typography.bodySmall)
-                                TextButton(onClick = pause) { Text("Pause") }
+                                TextButton(onClick = pause, enabled = !runtime.downloadPausePending) { Text(if (runtime.downloadPausePending) "Pausing…" else "Pause") }
                             }
                             runtime.busy -> LinearProgressIndicator(Modifier.fillMaxWidth())
                             runtime.loaded -> OutlinedButton(onClick = unload, enabled = !generating) { Text("Unload model") }
                             runtime.installed -> Button(onClick = load, enabled = !generating) { Text("Load model") }
-                            else -> Button(onClick = { consent = true }, enabled = runtime.nativeInfo != null && !generating) { Text("Download pack") }
+                            else -> Button(onClick = { consent = true }, enabled = runtime.nativeInfo != null && !generating) { Text(if (runtime.downloaded > 0) "Resume download" else "Download pack") }
                         }
                         if (!runtime.loaded && !runtime.busy) TextButton(onClick = { removal = true }, enabled = !generating) { Text("Remove stored files") }
                     }

@@ -6,6 +6,7 @@ import app.lfm3.probe.diagnostics.AppLog
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import java.io.File
 
 enum class RuntimePhase { CHECKING, AVAILABLE, DOWNLOADING, INSTALLED, LOADING, LOADED, ERROR, UNAVAILABLE }
@@ -18,6 +19,8 @@ data class RuntimeState(
     val installedIds: Set<String> = emptySet(),
     val loadedId: String? = null,
     val loadedContext: Int = 0,
+    val unmeteredDownloads: Boolean = true,
+    val downloadPausePending: Boolean = false,
 ) {
     val installed get() = selectedId in installedIds
     val loaded get() = loadedId != null
@@ -27,17 +30,18 @@ data class RuntimeState(
 
 class RuntimeManager(context: Context) {
     private val preferences = app.lfm3.probe.ui.TaviSettings(context)
+    private val downloads = (context.applicationContext as app.lfm3.probe.TaviApplication).downloads
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val log = AppLog(context)
     private val installers = ModelCatalog.packs.associate { it.id to PackInstaller(File(context.noBackupFilesDir, "models"), log::record, it) }
     private val preview = DeterministicProbeEngine()
-    private val _state = MutableStateFlow(RuntimeState())
+    private val _state = MutableStateFlow(RuntimeState(unmeteredDownloads = preferences.unmeteredDownloads))
     val state = _state.asStateFlow()
     @Volatile private var nativeRequested = false
     private val native = RemoteLlamaEngine(context) {
         log.record("RUNTIME_PROCESS_DISCONNECTED")
-        _state.value = _state.value.copy(phase = RuntimePhase.ERROR, loadedId = null, loadedContext = 0,
-            message = "Runtime process stopped. Your history is safe. Tap Load model to recover; requests are not replayed.")
+        _state.update { it.copy(phase = if (downloads.state.value.active) RuntimePhase.DOWNLOADING else RuntimePhase.ERROR, loadedId = null, loadedContext = 0,
+            message = if (downloads.state.value.active) downloads.state.value.message else "Runtime process stopped. Your history is safe. Tap Load model to recover; requests are not replayed.") }
     }
     private var task: Job? = null
     val engine = object : InferenceEngine {
@@ -57,35 +61,58 @@ class RuntimeManager(context: Context) {
                 log.record("NATIVE_RUNTIME_INITIALIZED")
                 val valid = installers.filterValues { it.verifyInstalled() }.keys
                 _state.value = RuntimeState(if ("lfm3-text" in valid) RuntimePhase.INSTALLED else RuntimePhase.AVAILABLE,
-                    info, "CPU runtime initialized. Select an installed pack to load.", installedIds = valid)
+                    info, "CPU runtime initialized. Select an installed pack to load.", installedIds = valid, unmeteredDownloads = preferences.unmeteredDownloads)
             } catch (_: LinkageError) { _state.value = RuntimeState(RuntimePhase.UNAVAILABLE, message = "ARM64 native runtime unavailable on this device.") }
             catch (_: Exception) { _state.value = RuntimeState(RuntimePhase.UNAVAILABLE, message = "Runtime initialization failed.") }
+            scope.launch { downloads.state.collect { applyDownload(it) } }
         }
     }
     fun select(id: String) {
-        if (task?.isActive == true || native.loaded || native.generating) return
+        if (task?.isActive == true || native.loaded || native.generating || downloads.state.value.active) return
         ModelCatalog.get(id)
         _state.value = _state.value.copy(selectedId = id, phase = if (id in _state.value.installedIds) RuntimePhase.INSTALLED else RuntimePhase.AVAILABLE,
             downloaded = 0, message = "${ModelCatalog.get(id).title} selected.")
     }
     fun download() {
-        if (task?.isActive == true || native.loaded || _state.value.nativeInfo == null || _state.value.installed) return
+        if (task?.isActive == true || native.loaded || native.generating || downloads.state.value.active || _state.value.nativeInfo == null || _state.value.installed) return
         val id = _state.value.selectedId
-        val installer = installers.getValue(id)
         task = scope.launch {
             try {
-                _state.value = _state.value.copy(phase = RuntimePhase.DOWNLOADING, message = "Downloading and verifying. Keep Tavi open.")
-                installer.install { bytes, _ -> _state.value = _state.value.copy(downloaded = bytes) }
-                _state.value = _state.value.copy(phase = RuntimePhase.INSTALLED, installedIds = _state.value.installedIds + id, message = "All pack components verified. Ready to load.")
-            } catch (_: CancellationException) { _state.value = _state.value.copy(phase = RuntimePhase.AVAILABLE, message = "Download paused. Tap Download to resume.") }
+                _state.update { it.copy(phase = RuntimePhase.DOWNLOADING, message = "Scheduling a background transfer…") }
+                downloads.enqueue(ModelCatalog.get(id), _state.value.unmeteredDownloads)
+            } catch (_: CancellationException) { /* App shutdown leaves the persistent scheduler in control. */ }
             catch (e: Exception) { _state.value = _state.value.copy(phase = RuntimePhase.ERROR, message = safeError(e, "Download failed. Check connectivity and storage, then retry.")) }
         }
     }
     fun pauseDownload() {
-        if (_state.value.phase == RuntimePhase.DOWNLOADING) { task?.cancel(); installers.getValue(_state.value.selectedId).interrupt() }
+        downloads.pause()
+    }
+    fun usePreview() {
+        if (native.loaded || native.generating || task?.isActive == true) return
+        nativeRequested = false
+    }
+    fun unmeteredDownloads(value: Boolean) {
+        if (downloads.state.value.active) return
+        preferences.unmeteredDownloads = value
+        _state.update { it.copy(unmeteredDownloads = value) }
+    }
+    private suspend fun applyDownload(record: DownloadRecord) {
+        if (record.status == DownloadStatus.IDLE || record.packId !in installers) return
+        if (_state.value.loaded || _state.value.phase == RuntimePhase.LOADING) return
+        val verified = record.status == DownloadStatus.COMPLETE &&
+            (record.packId in _state.value.installedIds || installers.getValue(record.packId).verifyInstalled())
+        _state.update { previous -> previous.copy(selectedId = record.packId, downloaded = record.bytes,
+            installedIds = if (verified) previous.installedIds + record.packId else previous.installedIds,
+            phase = when {
+                record.active -> RuntimePhase.DOWNLOADING
+                record.status == DownloadStatus.FAILED -> RuntimePhase.ERROR
+                verified || record.packId in previous.installedIds -> RuntimePhase.INSTALLED
+                else -> RuntimePhase.AVAILABLE
+            }, message = if (record.status == DownloadStatus.COMPLETE && !verified) "Stored pack is missing or damaged. Remove its files and download again." else record.message,
+            downloadPausePending = record.status == DownloadStatus.PAUSING) }
     }
     fun load() {
-        if (task?.isActive == true || !_state.value.installed || native.loaded || native.generating) return
+        if (task?.isActive == true || downloads.state.value.active || !_state.value.installed || native.loaded || native.generating) return
         val pack = _state.value.selected
         nativeRequested = true
         val installer = installers.getValue(pack.id)
@@ -112,11 +139,12 @@ class RuntimeManager(context: Context) {
         }
     }
     fun remove() {
-        if (task?.isActive == true || native.loaded || native.generating) return
+        if (task?.isActive == true || downloads.state.value.active || native.loaded || native.generating) return
         val id = _state.value.selectedId
         task = scope.launch {
             try {
                 installers.getValue(id).remove()
+                downloads.forget(id)
                 _state.value = _state.value.copy(phase = RuntimePhase.AVAILABLE, installedIds = _state.value.installedIds - id, downloaded = 0, message = "Model files removed.")
             } catch (_: Exception) { _state.value = _state.value.copy(phase = RuntimePhase.ERROR, message = "Unable to remove model files.") }
         }
