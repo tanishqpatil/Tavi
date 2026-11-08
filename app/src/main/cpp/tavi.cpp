@@ -1,5 +1,6 @@
 #include <jni.h>
 #include <llama.h>
+#include <ggml-backend.h>
 #include <mtmd.h>
 #include <mtmd-helper.h>
 #include <atomic>
@@ -11,6 +12,7 @@
 #include <chrono>
 #include <algorithm>
 #include <cstring>
+#include <cstdlib>
 
 namespace {
 std::atomic<bool> cancelled{false};
@@ -19,6 +21,7 @@ std::atomic<uint64_t> epoch{0};
 std::mutex lock;
 using Clock = std::chrono::steady_clock;
 struct Session {
+    ggml_backend_dev_t devices[2] = {nullptr, nullptr};
     llama_model * model = nullptr;
     llama_context * context = nullptr;
     llama_batch_ext * batch = nullptr;
@@ -53,6 +56,14 @@ std::string bytes(JNIEnv * env, jbyteArray value) {
     return result;
 }
 Session & ready() { if (!session) throw std::runtime_error("Load a verified model first."); return *session; }
+ggml_backend_reg_t opencl_registry() {
+#ifdef TAVI_DYNAMIC_BACKENDS
+    auto reg = ggml_backend_reg_by_name("OpenCL");
+    return reg ? reg : ggml_backend_load("libggml-opencl.so");
+#else
+    return nullptr;
+#endif
+}
 void process(Session & s, const llama_token * tokens, int count) {
     llama_batch_ext_clear(s.batch);
     for (int i = 0; i < count; ++i) {
@@ -67,17 +78,30 @@ void process(Session & s, const llama_token * tokens, int count) {
 }
 
 extern "C" JNIEXPORT jstring JNICALL Java_app_lfm3_probe_inference_NativeLlama_info(JNIEnv * env, jobject) {
+    try {
     static std::once_flag once;
     std::call_once(once, [] { llama_log_set([](ggml_log_level, const char * text, void *) {
         if (text && std::strstr(text, "CPU_KLEIDIAI")) kleidiai_buffer_seen = true;
-    }, nullptr); mtmd_helper_log_set([](ggml_log_level, const char *, void *) {}, nullptr); llama_backend_init(); });
+    }, nullptr); mtmd_helper_log_set([](ggml_log_level, const char *, void *) {}, nullptr);
+#ifdef TAVI_DYNAMIC_BACKENDS
+        // Register CPU first so llama_backend_init never auto-probes optional vendor drivers.
+        if (!ggml_backend_load("libggml-cpu.so")) throw std::runtime_error("CPU backend module could not be loaded.");
+#endif
+        llama_backend_init(); });
     return env->NewStringUTF("llama.cpp v0.8.0 / 8642541b2 / ARM64 CPU");
+    } catch (const std::exception & e) { error(env, e.what()); return nullptr; }
+}
+extern "C" JNIEXPORT jboolean JNICALL Java_app_lfm3_probe_inference_NativeLlama_openclAvailable(JNIEnv *, jobject) {
+    std::lock_guard<std::mutex> guard(lock);
+    if (session) return false;
+    try { auto reg = opencl_registry(); return reg && ggml_backend_reg_dev_count(reg) > 0; }
+    catch (...) { return false; }
 }
 extern "C" JNIEXPORT void JNICALL Java_app_lfm3_probe_inference_NativeLlama_cancel(JNIEnv *, jobject) { ++epoch; cancelled = true; }
 extern "C" JNIEXPORT jlong JNICALL Java_app_lfm3_probe_inference_NativeLlama_prepare(JNIEnv *, jobject) { cancelled = false; return ++epoch; }
 extern "C" JNIEXPORT void JNICALL Java_app_lfm3_probe_inference_NativeLlama_unload(JNIEnv *, jobject) { std::lock_guard<std::mutex> guard(lock); session.reset(); }
 
-extern "C" JNIEXPORT void JNICALL Java_app_lfm3_probe_inference_NativeLlama_load(JNIEnv * env, jobject, jstring path, jint context_tokens, jstring projector, jint threads, jint prefill_threads, jint batch_size) {
+extern "C" JNIEXPORT void JNICALL Java_app_lfm3_probe_inference_NativeLlama_load(JNIEnv * env, jobject, jstring path, jint context_tokens, jstring projector, jint threads, jint prefill_threads, jint batch_size, jboolean opencl, jstring cache_directory) {
     std::lock_guard<std::mutex> guard(lock);
     try {
         session.reset(); cancelled = false;
@@ -90,7 +114,17 @@ extern "C" JNIEXPORT void JNICALL Java_app_lfm3_probe_inference_NativeLlama_load
         if (!valid_threads(threads) || !valid_threads(prefill_threads) || (batch_size != 64 && batch_size != 128 && batch_size != 256)) throw std::runtime_error("Invalid CPU execution settings.");
         s->batch_size = batch_size;
         auto parameters = llama_model_default_params();
-        parameters.n_gpu_layers = 0;
+        parameters.n_gpu_layers = opencl ? -1 : 0;
+        parameters.devices = s->devices;
+        if (opencl) {
+            const char * cache = env->GetStringUTFChars(cache_directory, nullptr);
+            const std::string private_cache(cache); env->ReleaseStringUTFChars(cache_directory, cache);
+            if (private_cache.empty()) throw std::runtime_error("Private GPU cache is unavailable.");
+            setenv("GGML_OPENCL_KERNEL_CACHE_DIR", private_cache.c_str(), 1);
+            auto reg = opencl_registry();
+            if (!reg || ggml_backend_reg_dev_count(reg) == 0) throw std::runtime_error("OpenCL driver is unavailable. Select CPU and load again.");
+            s->devices[0] = ggml_backend_reg_dev_get(reg, 0);
+        }
         parameters.load_mode = LLAMA_LOAD_MODE_MMAP;
         parameters.progress_callback = [](float, void *) { return !cancelled.load(); };
         const char * file = env->GetStringUTFChars(path, nullptr);
@@ -113,7 +147,7 @@ extern "C" JNIEXPORT void JNICALL Java_app_lfm3_probe_inference_NativeLlama_load
         auto params = llama_context_default_params();
         params.n_ctx = s->context_limit; params.n_batch = batch_size; params.n_ubatch = batch_size; params.n_seq_max = 1;
         params.n_threads = threads; params.n_threads_batch = prefill_threads;
-        params.abort_callback = abort_cpu; params.abort_callback_data = s.get(); params.offload_kqv = false; params.op_offload = false;
+        params.abort_callback = abort_cpu; params.abort_callback_data = s.get(); params.offload_kqv = opencl; params.op_offload = opencl;
         params.embeddings = s->media && mtmd_gen_audio_get_info(s->media).type != MTMD_GEN_AUDIO_TYPE_NONE;
         s->context = llama_init_from_model(s->model, params);
         if (!s->context) throw std::runtime_error("Unable to allocate the model context.");

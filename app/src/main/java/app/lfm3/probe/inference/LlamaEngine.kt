@@ -23,15 +23,17 @@ class LlamaEngine(private val mediaStore: MediaStore? = null) : InferenceEngine 
     @Volatile var generating = false
         private set
     @Volatile private var pack: ModelPack = ModelCatalog.text
+    @Volatile private var backend = RuntimeBackend.CPU
     private val playback = AudioPlayback(mediaStore?.applicationContext) { NativeLlama.cancel() }
-    override val descriptor get() = InferenceWire.descriptor(pack)
+    override val descriptor get() = InferenceWire.descriptor(pack, backend)
     override fun prepare() = NativeLlama.prepare()
     override fun cancel() { NativeLlama.cancel(); playback.interrupt() }
 
-    suspend fun load(path: String, contextTokens: Int = 1024, projector: String = "", modelPack: ModelPack = ModelCatalog.text, cpu: CpuOptions = CpuOptions()) = withContext(Dispatchers.IO) {
+    suspend fun load(path: String, contextTokens: Int = 1024, projector: String = "", modelPack: ModelPack = ModelCatalog.text, cpu: CpuOptions = CpuOptions(), execution: RuntimeBackend = RuntimeBackend.CPU) = withContext(Dispatchers.IO) {
         mutex.withLock {
             loaded = false
-            NativeLlama.load(path, contextTokens, projector, cpu.threads, cpu.prefillThreads, cpu.batch)
+            val cache = mediaStore?.applicationContext?.let { java.io.File(it.noBackupFilesDir, "runtime-cache/opencl-v080").apply { mkdirs() }.path }.orEmpty()
+            NativeLlama.load(path, contextTokens, projector, cpu.threads, cpu.prefillThreads, cpu.batch, execution == RuntimeBackend.OPENCL, cache)
             val expected = modelPack.capabilities.sumOf { when (it) {
                 ModelCapability.TEXT -> 1; ModelCapability.PHOTO -> 2; ModelCapability.VOICE_INPUT -> 4; ModelCapability.VOICE_OUTPUT -> 8
             } }
@@ -39,7 +41,7 @@ class LlamaEngine(private val mediaStore: MediaStore? = null) : InferenceEngine 
                 NativeLlama.unload()
                 error("Loaded component capabilities do not match this model pack.")
             }
-            pack = modelPack; loaded = true
+            pack = modelPack; backend = execution; loaded = true
         }
     }
 

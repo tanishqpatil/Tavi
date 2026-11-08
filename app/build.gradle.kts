@@ -20,8 +20,11 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk { abiFilters += "arm64-v8a" }
         val kleidi = providers.gradleProperty("taviKleidiAi").orElse("false").get().also { require(it in setOf("true", "false")) }.toBoolean()
+        val opencl = providers.gradleProperty("taviOpenCl").orElse("false").get().also { require(it in setOf("true", "false")) }.toBoolean()
         buildConfigField("boolean", "CPU_KLEIDIAI_COMPILED", kleidi.toString())
-        externalNativeBuild { cmake { arguments += listOf("-DCMAKE_BUILD_TYPE=Release", "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON", "-DTAVI_KLEIDIAI=${if (kleidi) "ON" else "OFF"}") } }
+        buildConfigField("boolean", "OPENCL_COMPILED", opencl.toString())
+        externalNativeBuild { cmake { arguments += listOf("-DCMAKE_BUILD_TYPE=Release", "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON", "-DTAVI_KLEIDIAI=${if (kleidi) "ON" else "OFF"}", "-DTAVI_OPENCL=${if (opencl) "ON" else "OFF"}") } }
+        if (opencl) externalNativeBuild { cmake { arguments += "-DANDROID_STL=c++_shared" } }
     }
 
     buildFeatures {
@@ -48,6 +51,8 @@ android {
 
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        // This library is a link-time SDK dependency. Runtime uses the phone vendor's driver.
+        jniLibs.excludes += "**/libOpenCL.so"
     }
 }
 

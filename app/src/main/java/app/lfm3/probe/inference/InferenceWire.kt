@@ -51,7 +51,7 @@ internal object InferenceWire {
         return InferenceRequest(json.getLong("turn"), listOf(RequestPart.Text(last.text)) + last.media,
             messages.dropLast(1), ticket, output, json.getBoolean("speak"), system, json.optBoolean("routing"))
     }
-    fun descriptor(pack: ModelPack) = EngineDescriptor("llama.cpp v0.8.0 · ${pack.title} · CPU", pack.capabilities.map { when (it) {
+    fun descriptor(pack: ModelPack, backend: RuntimeBackend = RuntimeBackend.CPU) = EngineDescriptor("llama.cpp v0.8.0 · ${pack.title} · ${backend.label}", pack.capabilities.map { when (it) {
         ModelCapability.TEXT -> Capability.TEXT; ModelCapability.PHOTO -> Capability.IMAGE
         ModelCapability.VOICE_INPUT -> Capability.AUDIO_INPUT; ModelCapability.VOICE_OUTPUT -> Capability.AUDIO_OUTPUT
     } }.toSet(), EngineKind.LLAMA_CPP)

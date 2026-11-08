@@ -20,6 +20,7 @@ data class RuntimeState(
     val loadedId: String? = null,
     val loadedContext: Int = 0,
     val loadedCpu: CpuOptions? = null,
+    val loadedBackend: RuntimeBackend? = null,
     val unmeteredDownloads: Boolean = true,
     val downloadPausePending: Boolean = false,
 ) {
@@ -41,7 +42,7 @@ class RuntimeManager(context: Context) {
     @Volatile private var nativeRequested = false
     private val native = RemoteLlamaEngine(context) {
         log.record("RUNTIME_PROCESS_DISCONNECTED")
-        _state.update { it.copy(phase = if (downloads.state.value.active) RuntimePhase.DOWNLOADING else RuntimePhase.ERROR, loadedId = null, loadedContext = 0, loadedCpu = null,
+        _state.update { it.copy(phase = if (downloads.state.value.active) RuntimePhase.DOWNLOADING else RuntimePhase.ERROR, loadedId = null, loadedContext = 0, loadedCpu = null, loadedBackend = null,
             message = if (downloads.state.value.active) downloads.state.value.message else "Runtime process stopped. Your history is safe. Tap Load model to recover; requests are not replayed.") }
     }
     private var task: Job? = null
@@ -123,11 +124,12 @@ class RuntimeManager(context: Context) {
                 check(installer.verifyInstalled()) { "Installed pack failed verification. Remove and download again." }
                 val limits = preferences.limits
                 val cpu = preferences.cpu
-                native.load(pack, limits.context, cpu)
+                val backend = preferences.backend
+                native.load(pack, limits.context, cpu, backend)
                 log.record("LFM3_MODEL_LOADED")
-                _state.value = _state.value.copy(phase = RuntimePhase.LOADED, loadedId = pack.id, loadedContext = limits.context, loadedCpu = cpu,
-                    message = "${pack.title} · CPU · ${limits.context}-token context${if (pack.experimental) " · Experimental" else ""}")
-            } catch (e: Exception) { _state.value = _state.value.copy(phase = RuntimePhase.ERROR, loadedId = null, loadedCpu = null, message = safeError(e, "Model load failed.")) }
+                _state.value = _state.value.copy(phase = RuntimePhase.LOADED, loadedId = pack.id, loadedContext = limits.context, loadedCpu = cpu, loadedBackend = backend,
+                    message = "${pack.title} · ${backend.label} · ${limits.context}-token context${if (pack.experimental) " · Experimental" else ""}")
+            } catch (e: Exception) { _state.value = _state.value.copy(phase = RuntimePhase.ERROR, loadedId = null, loadedCpu = null, loadedBackend = null, message = safeError(e, "Model load failed.")) }
         }
     }
     fun unload() {
@@ -136,8 +138,19 @@ class RuntimeManager(context: Context) {
             try {
                 native.unload(); log.record("LFM3_MODEL_UNLOADED")
                 nativeRequested = false
-                _state.value = _state.value.copy(phase = RuntimePhase.INSTALLED, loadedId = null, loadedContext = 0, loadedCpu = null, message = "Model unloaded. Native resources released.")
+                _state.value = _state.value.copy(phase = RuntimePhase.INSTALLED, loadedId = null, loadedContext = 0, loadedCpu = null, loadedBackend = null, message = "Model unloaded. Native resources released.")
             } catch (e: Exception) { _state.value = _state.value.copy(phase = RuntimePhase.ERROR, message = safeError(e, "Unable to unload yet. Stop the response and retry.")) }
+        }
+    }
+    fun checkOpenCl() {
+        if (task?.isActive == true || native.loaded || native.generating || downloads.state.value.active) return
+        task = scope.launch {
+            _state.update { it.copy(phase = RuntimePhase.LOADING, message = "Checking optional OpenCL driver…") }
+            try {
+                val found = native.openclAvailable()
+                _state.update { it.copy(phase = if (it.installed) RuntimePhase.INSTALLED else RuntimePhase.AVAILABLE,
+                    message = if (found) "OpenCL driver detected. Model correctness and performance remain experimental." else "No accessible OpenCL driver. CPU remains available.") }
+            } catch (_: Exception) { _state.update { it.copy(phase = RuntimePhase.ERROR, message = "OpenCL check failed. Select CPU and load explicitly; nothing was replayed.") } }
         }
     }
     fun remove() {

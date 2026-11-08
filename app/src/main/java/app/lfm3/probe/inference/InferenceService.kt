@@ -54,6 +54,7 @@ class InferenceService : Service() {
                         val pack = ModelCatalog.get(checkNotNull(args.getString("pack")))
                         val context = args.getInt("context"); require(context in GenerationLimits.contexts)
                         val cpu = CpuOptions(args.getInt("cpuThreads", 4), args.getInt("prefillThreads", 4), args.getInt("prefillBatch", 128))
+                        val backend = RuntimeBackend.valueOf(args.getString("backend") ?: RuntimeBackend.CPU.name)
                         val root = File(noBackupFilesDir, "models")
                         val installer = PackInstaller(root, pack = pack)
                         lease = PackLease.acquire(root, pack, shared = true)
@@ -61,9 +62,13 @@ class InferenceService : Service() {
                             check(installer.verifyInstalled()) { "Model pack failed verification. Remove and download it again." }
                             ensureActive()
                             engine.load(File(installer.installed, pack.weights.name).path, context,
-                                pack.projector?.let { File(installer.installed, it.name).path }.orEmpty(), pack, cpu)
+                                pack.projector?.let { File(installer.installed, it.name).path }.orEmpty(), pack, cpu, backend)
                         } catch (error: Exception) { lease?.close(); lease = null; throw error }
                         terminal = InferenceWire.data(id, "ok")
+                    }
+                    "opencl" -> {
+                        check(initialized && !engine.loaded) { "Unload the model before checking OpenCL." }
+                        terminal = InferenceWire.data(id, "ok").apply { putBoolean("available", NativeLlama.openclAvailable()) }
                     }
                     "unload" -> { if (initialized) engine.unload(); lease?.close(); lease = null; terminal = InferenceWire.data(id, "ok") }
                     "generate" -> {

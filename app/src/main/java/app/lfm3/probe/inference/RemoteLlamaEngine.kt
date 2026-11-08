@@ -29,7 +29,8 @@ class RemoteLlamaEngine(context: Context, private val onDeath: () -> Unit = {}) 
     @Volatile var remotePid = 0
         private set
     private var pack: ModelPack = ModelCatalog.text
-    override val descriptor get() = InferenceWire.descriptor(pack)
+    private var backend = RuntimeBackend.CPU
+    override val descriptor get() = InferenceWire.descriptor(pack, backend)
     private val replies = Messenger(Handler(Looper.getMainLooper()) { message ->
         if (message.what == InferenceWire.RESPONSE) {
             val data = message.data
@@ -101,12 +102,17 @@ class RemoteLlamaEngine(context: Context, private val onDeath: () -> Unit = {}) 
         remotePid = result.getInt("pid")
         return checkNotNull(result.getString("info"))
     }
-    suspend fun load(modelPack: ModelPack, contextTokens: Int, cpu: CpuOptions = CpuOptions()) {
+    suspend fun openclAvailable(): Boolean {
+        check(!loaded && !generating) { "Unload the model before checking a GPU backend." }
+        if (transport == null || remotePid == 0) info()
+        return exchange("opencl").getBoolean("available")
+    }
+    suspend fun load(modelPack: ModelPack, contextTokens: Int, cpu: CpuOptions = CpuOptions(), execution: RuntimeBackend = RuntimeBackend.CPU) {
         check(!loaded && !generating) { "Unload the current model before loading another pack." }
         if (transport == null || remotePid == 0) info()
         exchange("load", Bundle().apply { putString("pack", modelPack.id); putInt("context", contextTokens)
-            putInt("cpuThreads", cpu.threads); putInt("prefillThreads", cpu.prefillThreads); putInt("prefillBatch", cpu.batch) })
-        pack = modelPack; loaded = true
+            putInt("cpuThreads", cpu.threads); putInt("prefillThreads", cpu.prefillThreads); putInt("prefillBatch", cpu.batch); putString("backend", execution.name) })
+        pack = modelPack; backend = execution; loaded = true
     }
     suspend fun unload() {
         if (transport != null) exchange("unload")

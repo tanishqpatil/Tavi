@@ -7,3 +7,13 @@ The applicable Apache-2.0 and BSD-3-Clause license texts are included as
 kleidiai-Apache-2.0.txt and kleidiai-BSD-3-Clause.txt in the app assets.
 Runtime kernel selection depends on CPU features, tensor types and shapes.
 Compiling this dependency is not a claim that every operation is accelerated.
+
+Optional OpenCL backend build:
+Khronos OpenCL-Headers v2026.05.29, commit 6fe718c31a45fe25151362a72ef041c3a1047cbd.
+Khronos OpenCL-ICD-Loader v2026.05.29, commit b7bd2803acc779c03d96588e9ca9e9568a18698a.
+https://github.com/KhronosGroup/OpenCL-Headers
+https://github.com/KhronosGroup/OpenCL-ICD-Loader
+The loader is used only for linking; libOpenCL.so is excluded from the APK.
+Applicable license texts are opencl-headers-LICENSE.txt and opencl-loader-LICENSE.txt.
+The device vendor supplies the actual driver. Availability does not establish
+model correctness, acceleration coverage or improved performance.

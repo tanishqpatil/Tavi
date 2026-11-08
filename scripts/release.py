@@ -71,6 +71,8 @@ def verify(apk, tools, output):
     if not re.search(r"^sdkVersion:'26'$", badging, re.M):
         raise ValueError("Unexpected minimum Android SDK")
     with zipfile.ZipFile(apk) as archive:
+        if any(path.startswith('lib/') and path.endswith('/libOpenCL.so') for path in archive.namelist()):
+            raise ValueError("Link-only OpenCL SDK loader must not be packaged as a phone driver")
         abis = {path.split('/')[1] for path in archive.namelist() if path.startswith('lib/') and path.endswith('.so')}
         if abis != {"arm64-v8a"} or "lib/arm64-v8a/libtavi.so" not in archive.namelist():
             raise ValueError("Expected only the ARM64 native runtime")

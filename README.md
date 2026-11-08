@@ -23,6 +23,8 @@ The **0.2.0 development phase** evaluates runtime performance without assuming o
 
 Portable CPU remains the default. An optional KleidiAI comparison build uses `./gradlew -PtaviKleidiAi=true :app:assembleDebug`; disable with `-PtaviKleidiAi=false`. The pinned v1.32.0 source archive is SHA-256 verified and its licenses are included. If the source host is unavailable, `TAVI_KLEIDIAI_ARCHIVE` may point to a previously downloaded archive; the same checksum is required. The initial emulator comparison was slower with KleidiAI, so it has not replaced the default. Thread count, quantization, memory, hardware and workload affect results; phone benchmarks remain separate.
 
+An **experimental OpenCL build** uses `./gradlew -PtaviOpenCl=true :app:assembleDebug`. It packages an optional backend module and uses the phone's vendor driver; it never bundles an SDK loader as a driver. Select **Settings → Execution backend → OpenCL** while unloaded, then load a pack. Only the language model is offloaded; media remains on CPU. **Check OpenCL driver** reports detection, not model compatibility or speed. Unsupported driver/load failures remain visible; select CPU and load explicitly to recover. The emulator no-driver/lease-release/CPU-recovery path is tested; physical GPU correctness and performance are pending. The default build keeps this option disabled.
+
 ## Current status
 
 The Kotlin/Compose interface includes Chat, persistent History, Models, and Settings; light/dark/system themes; reduced motion; and an optional developer panel. The Tavi logo is generated artwork and is included as the app's launcher icon.
