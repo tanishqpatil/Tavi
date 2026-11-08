@@ -29,6 +29,15 @@ android {
         buildConfigField("boolean", "CPU_KLEIDIAI_COMPILED", kleidi.toString())
         buildConfigField("boolean", "OPENCL_COMPILED", opencl.toString())
         buildConfigField("boolean", "LITERT_EXPERIMENTAL", liteRtLab.toString())
+        val profile = when {
+            listOf(kleidi, opencl, liteRtLab).count { it } > 1 -> "combined-experimental"
+            liteRtLab -> "litert-lab"
+            opencl -> "opencl"
+            kleidi -> "cpu-optimized"
+            else -> "portable"
+        }
+        buildConfigField("String", "RUNTIME_PROFILE", "\"$profile\"")
+        manifestPlaceholders["taviRuntimeProfile"] = profile
         externalNativeBuild { cmake { arguments += listOf("-DCMAKE_BUILD_TYPE=Release", "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON", "-DTAVI_KLEIDIAI=${if (kleidi) "ON" else "OFF"}", "-DTAVI_OPENCL=${if (opencl) "ON" else "OFF"}") } }
         if (opencl) externalNativeBuild { cmake { arguments += "-DANDROID_STL=c++_shared" } }
     }

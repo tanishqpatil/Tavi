@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing version tag to build, for example v0.1.0-alpha.1'
+        description: 'Existing version tag to build, for example v0.2.0'
         required: true
         type: string
 
@@ -73,23 +73,41 @@ jobs:
           test -n "$KEYSTORE_BASE64" || { echo 'Missing release signing secret.' >&2; exit 1; }
           printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/tavi-release.p12"
 
-      - name: Test, lint and build the signed release
+      - name: Fetch the pinned optional CPU source archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/kleidiai"
+          gh release download v1.32.0 --repo ARM-software/kleidiai --pattern kleidiai-v1.32.0-src.tar.gz --dir "$RUNNER_TEMP/kleidiai"
+          archive="$RUNNER_TEMP/kleidiai/kleidiai-v1.32.0-src.tar.gz"
+          echo "a48d373e7c5d721a0aecbf5ddaf0bdf245bc8064e6b84086f13db0e102b553a6  $archive" | sha256sum -c -
+          echo "TAVI_KLEIDIAI_ARCHIVE=$archive" >> "$GITHUB_ENV"
+
+      - name: Test, lint, sign and verify each runtime variant
         env:
           TAVI_SIGNING_KEYSTORE: ${{ runner.temp }}/tavi-release.p12
           TAVI_SIGNING_STORE_PASSWORD: ${{ secrets.TAVI_SIGNING_STORE_PASSWORD }}
           TAVI_SIGNING_KEY_ALIAS: ${{ secrets.TAVI_SIGNING_KEY_ALIAS }}
           TAVI_SIGNING_KEY_PASSWORD: ${{ secrets.TAVI_SIGNING_KEY_PASSWORD }}
-        run: >-
-          ./gradlew --no-daemon --no-configuration-cache --stacktrace --max-workers=2
-          :app:testDebugUnitTest :app:lintRelease
-          :app:assembleRelease :app:assembleDebugAndroidTest
-
-      - name: Verify release identity, signature, ABI and alignment
-        run: >-
-          python3 scripts/release.py verify
-          --apk app/build/outputs/apk/release/app-release.apk
-          --build-tools "$ANDROID_HOME/build-tools/36.0.0"
-          --output dist
+        run: |
+          set -euo pipefail
+          for variant in portable cpu-optimized opencl litert-lab; do
+            kleidi=false; opencl=false; litert=false
+            case "$variant" in
+              cpu-optimized) kleidi=true ;;
+              opencl) opencl=true ;;
+              litert-lab) litert=true ;;
+            esac
+            ./gradlew --no-daemon --no-configuration-cache --stacktrace --max-workers=2 \
+              -PtaviKleidiAi="$kleidi" -PtaviOpenCl="$opencl" -PtaviLiteRt="$litert" \
+              :app:testDebugUnitTest :app:lintRelease :app:assembleRelease :app:assembleDebugAndroidTest
+            python3 scripts/release.py verify --apk app/build/outputs/apk/release/app-release.apk \
+              --build-tools "$ANDROID_HOME/build-tools/36.0.0" --output dist --variant "$variant"
+            mkdir -p "dist-checks/$variant"
+            cp -R app/build/reports/tests "dist-checks/$variant/"
+            cp app/build/reports/lint-results-release.* "dist-checks/$variant/"
+          done
 
       - name: Upload verified release files
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -110,6 +128,7 @@ jobs:
         with:
           name: release-checks-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
+            dist-checks/
             app/build/reports/tests/
             app/build/reports/lint-results-release.*
             app/build/test-results/testDebugUnitTest/
@@ -148,7 +167,7 @@ jobs:
           else
             gh release create "$RELEASE_TAG" --verify-tag --draft --title "Tavi $RELEASE_TAG" --notes-file dist/RELEASE-NOTES.txt
           fi
-          gh release upload "$RELEASE_TAG" dist/*.apk dist/SHA256SUMS.txt dist/BUILD-INFO.txt --clobber
+          gh release upload "$RELEASE_TAG" dist/*.apk dist/SHA256SUMS.txt dist/BUILD-INFO*.txt --clobber
           if [ "$PRERELEASE" = true ]; then
             gh release edit "$RELEASE_TAG" --draft=false --prerelease --latest=false
           else

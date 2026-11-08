@@ -35,7 +35,7 @@ object DiagnosticReport {
         val report = JSONObject().apply {
             put("format_version", 1); put("created_utc", Instant.now().toString())
             put("app", JSONObject().put("version", BuildConfig.VERSION_NAME).put("version_code", BuildConfig.VERSION_CODE)
-                .put("build_type", BuildConfig.BUILD_TYPE).put("application_id", BuildConfig.APPLICATION_ID))
+                .put("build_type", BuildConfig.BUILD_TYPE).put("runtime_profile", BuildConfig.RUNTIME_PROFILE).put("application_id", BuildConfig.APPLICATION_ID))
             put("device", JSONObject().put("manufacturer", label(Build.MANUFACTURER)).put("model", label(Build.MODEL))
                 .put("android_release", label(Build.VERSION.RELEASE)).put("sdk", Build.VERSION.SDK_INT)
                 .put("security_patch", label(Build.VERSION.SECURITY_PATCH)).put("abis", JSONArray(Build.SUPPORTED_ABIS.take(4)))

@@ -18,5 +18,6 @@ app-logs/
 **/.cxx/
 model-cache/
 dist/
+__pycache__/
 *.p12
 *.pfx
