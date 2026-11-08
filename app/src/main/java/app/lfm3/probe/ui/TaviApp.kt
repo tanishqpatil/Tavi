@@ -131,7 +131,7 @@ fun TaviApp(
                         onModels = { page = Page.MODELS }, onPreview = { runtime.usePreview(); model.newChat(); showPreview = true })
                     Page.MODELS -> ModelsPage(runtimeState, state.isGenerating || state.isRecording || state.isImporting, runtime::select, runtime::download, runtime::pauseDownload, runtime::load, runtime::unload, runtime::remove, runtime::unmeteredDownloads)
                     Page.HISTORY -> ConversationHistoryPage(state, model, onOpen = { real -> if (!real && !runtimeState.loaded) runtime.usePreview(); page = Page.CHAT })
-                    Page.SETTINGS -> SettingsPage(theme, developer, reduceMotion, onTheme, onDeveloper, onReduceMotion, limits, onLimits)
+                    Page.SETTINGS -> SettingsPage(theme, developer, reduceMotion, onTheme, onDeveloper, onReduceMotion, limits, onLimits, runtimeState, state.metrics)
                 }
             }
         }
@@ -461,9 +461,11 @@ private fun ModelsPage(runtime: RuntimeState, generating: Boolean, select: (Stri
 @Composable
 private fun SettingsPage(theme: ThemeChoice, developer: Boolean, reduced: Boolean,
                          onTheme: (ThemeChoice) -> Unit, onDeveloper: (Boolean) -> Unit, onReduced: (Boolean) -> Unit,
-                         limits: GenerationLimits, onLimits: (GenerationLimits) -> Unit) {
+                         limits: GenerationLimits, onLimits: (GenerationLimits) -> Unit,
+                         runtime: RuntimeState, metrics: GenerationMetrics) {
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
         item { PageHeading("Make it yours", "A calmer space, set up your way.") }
+        item { DiagnosticsSettings(runtime, limits, metrics) }
         item { OnlineSettings((LocalContext.current.applicationContext as TaviApplication).online) }
         item {
             Eyebrow("GENERATION")

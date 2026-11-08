@@ -15,6 +15,8 @@ Built with Kotlin, Jetpack Compose and an embedded llama.cpp/libmtmd runtime. No
 3. Tap **Load model**, then open **Chat**. Model files stay on your device.
 4. Enable **Settings → Developer view** for output-token counts, decode speed and first-text timing.
 
+For phone test reports, open **Settings → Phone test diagnostics → Preview diagnostics**, review the JSON, then choose **Save report…**. It contains build/device information, selected/loaded pack and context, recent token metrics, memory snapshots and recognized operational event codes. It excludes conversation text/media, server URLs, tool arguments, account/serial identifiers, private paths and keys. Nothing is uploaded automatically. Memory snapshots may be cached by Android and are not peak usage or device-compatibility measurements.
+
 Total device RAM alone does not establish compatibility. No physical-phone performance tier is qualified yet.
 
 ## Current status
