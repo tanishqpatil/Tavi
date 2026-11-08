@@ -19,6 +19,10 @@ For phone test reports, open **Settings → Phone test diagnostics → Preview d
 
 Total device RAM alone does not establish compatibility. No physical-phone performance tier is qualified yet.
 
+The **0.2.0 development phase** evaluates runtime performance without assuming one engine is best on every phone. Settings includes bounded response/prefill thread counts and prefill batch sizes; unload before changing them. Defaults remain4/4 threads and batch128. Developer view adds native prefill time and whether a KleidiAI buffer allocation was observed; this is not proof every operation used an optimized kernel.
+
+Portable CPU remains the default. An optional KleidiAI comparison build uses `./gradlew -PtaviKleidiAi=true :app:assembleDebug`; disable with `-PtaviKleidiAi=false`. The pinned v1.32.0 source archive is SHA-256 verified and its licenses are included. If the source host is unavailable, `TAVI_KLEIDIAI_ARCHIVE` may point to a previously downloaded archive; the same checksum is required. The initial emulator comparison was slower with KleidiAI, so it has not replaced the default. Thread count, quantization, memory, hardware and workload affect results; phone benchmarks remain separate.
+
 ## Current status
 
 The Kotlin/Compose interface includes Chat, persistent History, Models, and Settings; light/dark/system themes; reduced motion; and an optional developer panel. The Tavi logo is generated artwork and is included as the app's launcher icon.

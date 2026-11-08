@@ -1,0 +1,9 @@
+Tavi optional CPU acceleration
+
+KleidiAI v1.32.0, ARM Limited and contributors.
+Source: https://github.com/ARM-software/kleidiai/releases/tag/v1.32.0
+Archive SHA-256: a48d373e7c5d721a0aecbf5ddaf0bdf245bc8064e6b84086f13db0e102b553a6
+The applicable Apache-2.0 and BSD-3-Clause license texts are included as
+kleidiai-Apache-2.0.txt and kleidiai-BSD-3-Clause.txt in the app assets.
+Runtime kernel selection depends on CPU features, tensor types and shapes.
+Compiling this dependency is not a claim that every operation is accelerated.

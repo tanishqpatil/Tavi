@@ -399,6 +399,7 @@ private fun DeveloperPanel(state: ProbeUiState) {
             }
             if (expanded) {
                 Text("Engine  ${state.engineName}\nTokens  ${state.metrics.outputTokens ?: "unavailable"}\nFirst text  ${state.metrics.firstTextMs?.let { "$it ms" } ?: "—"}", style = MaterialTheme.typography.labelSmall)
+                state.metrics.prefillNanos?.let { Text("Native prefill  ${it / 1_000_000} ms · CPU packed buffer  ${if (state.metrics.optimizedCpuBuffer) "KleidiAI observed" else "not observed"}", style = MaterialTheme.typography.labelSmall) }
                 if (state.metrics.audioSamples != null && state.metrics.audioRate != null) Text(
                     "Generated speech  ${String.format(Locale.ROOT, "%.2f", state.metrics.audioSamples.toDouble() / state.metrics.audioRate)} s · ${state.metrics.audioRate} Hz\nFirst decoded audio  ${state.metrics.firstAudioMs ?: "—"} ms",
                     style = MaterialTheme.typography.labelSmall)
@@ -493,6 +494,7 @@ private fun SettingsPage(theme: ThemeChoice, developer: Boolean, reduced: Boolea
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
         item { PageHeading("Make it yours", "A calmer space, set up your way.") }
         item { DiagnosticsSettings(runtime, limits, metrics) }
+        item { CpuSettings(runtime) }
         item { OnlineSettings((LocalContext.current.applicationContext as TaviApplication).online) }
         item {
             Eyebrow("GENERATION")

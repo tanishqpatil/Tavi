@@ -28,10 +28,10 @@ class LlamaEngine(private val mediaStore: MediaStore? = null) : InferenceEngine 
     override fun prepare() = NativeLlama.prepare()
     override fun cancel() { NativeLlama.cancel(); playback.interrupt() }
 
-    suspend fun load(path: String, contextTokens: Int = 1024, projector: String = "", modelPack: ModelPack = ModelCatalog.text) = withContext(Dispatchers.IO) {
+    suspend fun load(path: String, contextTokens: Int = 1024, projector: String = "", modelPack: ModelPack = ModelCatalog.text, cpu: CpuOptions = CpuOptions()) = withContext(Dispatchers.IO) {
         mutex.withLock {
             loaded = false
-            NativeLlama.load(path, contextTokens, projector)
+            NativeLlama.load(path, contextTokens, projector, cpu.threads, cpu.prefillThreads, cpu.batch)
             val expected = modelPack.capabilities.sumOf { when (it) {
                 ModelCapability.TEXT -> 1; ModelCapability.PHOTO -> 2; ModelCapability.VOICE_INPUT -> 4; ModelCapability.VOICE_OUTPUT -> 8
             } }
@@ -63,7 +63,7 @@ class LlamaEngine(private val mediaStore: MediaStore? = null) : InferenceEngine 
                 var firstAudioMs: Long? = null
                 suspend fun usage() {
                     val stats = NativeLlama.usage()
-                    emit(InferenceEvent.Usage(request.turnId, stats[0].toInt(), stats[1], audioSamples, audioRate, audioPeak, firstAudioMs))
+                    emit(InferenceEvent.Usage(request.turnId, stats[0].toInt(), stats[1], audioSamples, audioRate, audioPeak, firstAudioMs, stats[3], stats[4] != 0L))
                 }
                 currentCoroutineContext().ensureActive()
                 // LiquidAI's voice-chat contract asks for mixed output through both the prompt and codec mode.

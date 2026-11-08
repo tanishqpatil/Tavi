@@ -11,6 +11,9 @@ class TaviSettings(context: Context) {
     var limits: app.lfm3.probe.inference.GenerationLimits
         get() = runCatching { app.lfm3.probe.inference.GenerationLimits(preferences.getInt("context", 1024), preferences.getInt("output", 128)) }.getOrDefault(app.lfm3.probe.inference.GenerationLimits())
         set(value) { preferences.edit().putInt("context", value.context).putInt("output", value.output).apply() }
+    var cpu: app.lfm3.probe.inference.CpuOptions
+        get() = runCatching { app.lfm3.probe.inference.CpuOptions(preferences.getInt("cpu_threads", 4), preferences.getInt("prefill_threads", 4), preferences.getInt("prefill_batch", 128)) }.getOrDefault(app.lfm3.probe.inference.CpuOptions())
+        set(value) { preferences.edit().putInt("cpu_threads", value.threads).putInt("prefill_threads", value.prefillThreads).putInt("prefill_batch", value.batch).apply() }
     var theme: ThemeChoice
         get() = ThemeChoice.entries.firstOrNull { it.name == preferences.getString("theme", null) } ?: ThemeChoice.SYSTEM
         set(value) { preferences.edit().putString("theme", value.name).apply() }

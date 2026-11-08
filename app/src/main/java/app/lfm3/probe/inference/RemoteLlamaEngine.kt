@@ -101,10 +101,11 @@ class RemoteLlamaEngine(context: Context, private val onDeath: () -> Unit = {}) 
         remotePid = result.getInt("pid")
         return checkNotNull(result.getString("info"))
     }
-    suspend fun load(modelPack: ModelPack, contextTokens: Int) {
+    suspend fun load(modelPack: ModelPack, contextTokens: Int, cpu: CpuOptions = CpuOptions()) {
         check(!loaded && !generating) { "Unload the current model before loading another pack." }
         if (transport == null || remotePid == 0) info()
-        exchange("load", Bundle().apply { putString("pack", modelPack.id); putInt("context", contextTokens) })
+        exchange("load", Bundle().apply { putString("pack", modelPack.id); putInt("context", contextTokens)
+            putInt("cpuThreads", cpu.threads); putInt("prefillThreads", cpu.prefillThreads); putInt("prefillBatch", cpu.batch) })
         pack = modelPack; loaded = true
     }
     suspend fun unload() {
@@ -144,7 +145,8 @@ class RemoteLlamaEngine(context: Context, private val onDeath: () -> Unit = {}) 
                         if (text.isNotEmpty()) emit(InferenceEvent.TextDelta(request.turnId, text))
                         if (event.containsKey("tokens")) emit(InferenceEvent.Usage(request.turnId, event.getInt("tokens"), event.getLong("nanos"),
                             event.getLong("audioSamples"), event.getInt("audioRate"), event.getFloat("audioPeak"),
-                            if (event.containsKey("firstAudioMs")) event.getLong("firstAudioMs") else null))
+                            if (event.containsKey("firstAudioMs")) event.getLong("firstAudioMs") else null,
+                            event.getLong("prefillNanos"), event.getBoolean("optimizedCpuBuffer")))
                         send(target, InferenceWire.ACK, InferenceWire.data(id, "ack").apply { putLong("sequence", event.getLong("sequence")) })
                     }
                     "done" -> { terminal = true; emit(InferenceEvent.Completed(request.turnId, event.getBoolean("limit"))); break }

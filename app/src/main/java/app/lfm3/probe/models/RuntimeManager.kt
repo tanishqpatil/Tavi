@@ -19,6 +19,7 @@ data class RuntimeState(
     val installedIds: Set<String> = emptySet(),
     val loadedId: String? = null,
     val loadedContext: Int = 0,
+    val loadedCpu: CpuOptions? = null,
     val unmeteredDownloads: Boolean = true,
     val downloadPausePending: Boolean = false,
 ) {
@@ -40,7 +41,7 @@ class RuntimeManager(context: Context) {
     @Volatile private var nativeRequested = false
     private val native = RemoteLlamaEngine(context) {
         log.record("RUNTIME_PROCESS_DISCONNECTED")
-        _state.update { it.copy(phase = if (downloads.state.value.active) RuntimePhase.DOWNLOADING else RuntimePhase.ERROR, loadedId = null, loadedContext = 0,
+        _state.update { it.copy(phase = if (downloads.state.value.active) RuntimePhase.DOWNLOADING else RuntimePhase.ERROR, loadedId = null, loadedContext = 0, loadedCpu = null,
             message = if (downloads.state.value.active) downloads.state.value.message else "Runtime process stopped. Your history is safe. Tap Load model to recover; requests are not replayed.") }
     }
     private var task: Job? = null
@@ -121,11 +122,12 @@ class RuntimeManager(context: Context) {
                 _state.value = _state.value.copy(phase = RuntimePhase.LOADING, message = "Verifying files and allocating model context…")
                 check(installer.verifyInstalled()) { "Installed pack failed verification. Remove and download again." }
                 val limits = preferences.limits
-                native.load(pack, limits.context)
+                val cpu = preferences.cpu
+                native.load(pack, limits.context, cpu)
                 log.record("LFM3_MODEL_LOADED")
-                _state.value = _state.value.copy(phase = RuntimePhase.LOADED, loadedId = pack.id, loadedContext = limits.context,
+                _state.value = _state.value.copy(phase = RuntimePhase.LOADED, loadedId = pack.id, loadedContext = limits.context, loadedCpu = cpu,
                     message = "${pack.title} · CPU · ${limits.context}-token context${if (pack.experimental) " · Experimental" else ""}")
-            } catch (e: Exception) { _state.value = _state.value.copy(phase = RuntimePhase.ERROR, loadedId = null, message = safeError(e, "Model load failed.")) }
+            } catch (e: Exception) { _state.value = _state.value.copy(phase = RuntimePhase.ERROR, loadedId = null, loadedCpu = null, message = safeError(e, "Model load failed.")) }
         }
     }
     fun unload() {
@@ -134,7 +136,7 @@ class RuntimeManager(context: Context) {
             try {
                 native.unload(); log.record("LFM3_MODEL_UNLOADED")
                 nativeRequested = false
-                _state.value = _state.value.copy(phase = RuntimePhase.INSTALLED, loadedId = null, loadedContext = 0, message = "Model unloaded. Native resources released.")
+                _state.value = _state.value.copy(phase = RuntimePhase.INSTALLED, loadedId = null, loadedContext = 0, loadedCpu = null, message = "Model unloaded. Native resources released.")
             } catch (e: Exception) { _state.value = _state.value.copy(phase = RuntimePhase.ERROR, message = safeError(e, "Unable to unload yet. Stop the response and retry.")) }
         }
     }

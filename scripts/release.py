@@ -28,6 +28,15 @@ def version():
     return name, code
 
 
+def is_prerelease(name):
+    values = dict(line.split("=", 1) for line in (ROOT / "gradle.properties").read_text().splitlines()
+                  if "=" in line and not line.lstrip().startswith("#"))
+    flag = values.get("taviPrerelease", "false")
+    if flag not in {"true", "false"}:
+        raise ValueError("taviPrerelease must be true or false")
+    return "-" in name or flag == "true"
+
+
 def metadata(tag):
     name, code = version()
     if tag != "v" + name:
@@ -37,7 +46,7 @@ def metadata(tag):
         raise ValueError("The checked-out commit does not match the existing release tag")
     command("git", "merge-base", "--is-ancestor", "HEAD", "origin/main")
     # Values are validated before being written to GitHub step outputs.
-    print(f"tag={tag}\nversion={name}\ncode={code}\ncommit={commit}\nprerelease={'true' if '-' in name else 'false'}")
+    print(f"tag={tag}\nversion={name}\ncode={code}\ncommit={commit}\nprerelease={'true' if is_prerelease(name) else 'false'}")
 
 
 def verify(apk, tools, output):
@@ -83,13 +92,13 @@ def verify(apk, tools, output):
         "APK signature and 16 KB ZIP alignment verified. No model weights included.\n"
         "All four packs have synthetic real-model emulator checks; camera/microphone hardware, speech quality and phone performance remain experimental.\n")
     (output / "RELEASE-NOTES.txt").write_text(
-        f"Tavi {name} — {'development prerelease' if '-' in name else 'release'}\n\n"
+        f"Tavi {name} — {'development prerelease' if is_prerelease(name) else 'release'}\n\n"
         "Download the ARM64 APK below; no GitHub login or Actions artifact ZIP is needed. "
         "Android 8+ required. Download models inside Tavi.\n\n"
         "Local LFM3 text chat, private history, model manager and optional keyless web search/MCP. "
         "Reviewed Android text/photo sharing, persistent draft attachments, previewed phone diagnostics "
         "and stop-on-audio-interruption are included. "
-        "This version fixes the missing LFM3 template BOS prefix and the default mixed-speech instruction. "
+        "This phase adds bounded CPU tuning and native prefill timing, with optimized kernels kept experimental. "
         "All four packs have synthetic emulator checks, including combined photo/voice/speech and cancellation. "
         "Developer view includes generated-speech duration/rate and first decoded audio timing. "
         "Online tools are off by default. Photo/voice paths are experimental and require phone testing. "

@@ -13,8 +13,8 @@
 #include <cstring>
 
 namespace {
-constexpr int BATCH = 128;
 std::atomic<bool> cancelled{false};
+std::atomic<bool> kleidiai_buffer_seen{false};
 std::atomic<uint64_t> epoch{0};
 std::mutex lock;
 using Clock = std::chrono::steady_clock;
@@ -30,7 +30,8 @@ struct Session {
     int audio_rate = 24000, steps = 0;
     int64_t audio_samples = 0;
     int position = 0, tokens = 0;
-    int64_t nanos = 0;
+    int64_t nanos = 0, prefill_nanos = 0;
+    int batch_size = 128;
     uint64_t ticket = 0;
     int context_limit = 1024, output_limit = 128;
     ~Session() {
@@ -67,21 +68,27 @@ void process(Session & s, const llama_token * tokens, int count) {
 
 extern "C" JNIEXPORT jstring JNICALL Java_app_lfm3_probe_inference_NativeLlama_info(JNIEnv * env, jobject) {
     static std::once_flag once;
-    std::call_once(once, [] { llama_log_set([](ggml_log_level, const char *, void *) {}, nullptr); mtmd_helper_log_set([](ggml_log_level, const char *, void *) {}, nullptr); llama_backend_init(); });
+    std::call_once(once, [] { llama_log_set([](ggml_log_level, const char * text, void *) {
+        if (text && std::strstr(text, "CPU_KLEIDIAI")) kleidiai_buffer_seen = true;
+    }, nullptr); mtmd_helper_log_set([](ggml_log_level, const char *, void *) {}, nullptr); llama_backend_init(); });
     return env->NewStringUTF("llama.cpp v0.8.0 / 8642541b2 / ARM64 CPU");
 }
 extern "C" JNIEXPORT void JNICALL Java_app_lfm3_probe_inference_NativeLlama_cancel(JNIEnv *, jobject) { ++epoch; cancelled = true; }
 extern "C" JNIEXPORT jlong JNICALL Java_app_lfm3_probe_inference_NativeLlama_prepare(JNIEnv *, jobject) { cancelled = false; return ++epoch; }
 extern "C" JNIEXPORT void JNICALL Java_app_lfm3_probe_inference_NativeLlama_unload(JNIEnv *, jobject) { std::lock_guard<std::mutex> guard(lock); session.reset(); }
 
-extern "C" JNIEXPORT void JNICALL Java_app_lfm3_probe_inference_NativeLlama_load(JNIEnv * env, jobject, jstring path, jint context_tokens, jstring projector) {
+extern "C" JNIEXPORT void JNICALL Java_app_lfm3_probe_inference_NativeLlama_load(JNIEnv * env, jobject, jstring path, jint context_tokens, jstring projector, jint threads, jint prefill_threads, jint batch_size) {
     std::lock_guard<std::mutex> guard(lock);
     try {
         session.reset(); cancelled = false;
+        kleidiai_buffer_seen = false;
         auto s = std::make_unique<Session>();
         s->ticket = epoch.load();
         if (context_tokens < 1024 || context_tokens > 8192) throw std::runtime_error("Invalid context size.");
         s->context_limit = context_tokens;
+        auto valid_threads = [](int n) { return n == 1 || n == 2 || n == 4 || n == 6 || n == 8; };
+        if (!valid_threads(threads) || !valid_threads(prefill_threads) || (batch_size != 64 && batch_size != 128 && batch_size != 256)) throw std::runtime_error("Invalid CPU execution settings.");
+        s->batch_size = batch_size;
         auto parameters = llama_model_default_params();
         parameters.n_gpu_layers = 0;
         parameters.load_mode = LLAMA_LOAD_MODE_MMAP;
@@ -96,7 +103,7 @@ extern "C" JNIEXPORT void JNICALL Java_app_lfm3_probe_inference_NativeLlama_load
         const char * proj = env->GetStringUTFChars(projector, nullptr);
         std::string proj_file(proj); env->ReleaseStringUTFChars(projector, proj);
         if (!proj_file.empty()) {
-            auto mp = mtmd_context_params_default(); mp.use_gpu = false; mp.n_threads = 4; mp.warmup = false;
+            auto mp = mtmd_context_params_default(); mp.use_gpu = false; mp.n_threads = prefill_threads; mp.warmup = false;
             mp.progress_callback = [](float, void *) { return !cancelled.load(); };
             mp.cb_eval = [](ggml_tensor *, bool ask, void * data) { return ask || !abort_cpu(data); };
             mp.cb_eval_user_data = s.get();
@@ -104,8 +111,8 @@ extern "C" JNIEXPORT void JNICALL Java_app_lfm3_probe_inference_NativeLlama_load
             if (!s->media) throw std::runtime_error("Unable to load the matching multimodal component.");
         }
         auto params = llama_context_default_params();
-        params.n_ctx = s->context_limit; params.n_batch = BATCH; params.n_ubatch = BATCH; params.n_seq_max = 1;
-        params.n_threads = 4; params.n_threads_batch = 4;
+        params.n_ctx = s->context_limit; params.n_batch = batch_size; params.n_ubatch = batch_size; params.n_seq_max = 1;
+        params.n_threads = threads; params.n_threads_batch = prefill_threads;
         params.abort_callback = abort_cpu; params.abort_callback_data = s.get(); params.offload_kqv = false; params.op_offload = false;
         params.embeddings = s->media && mtmd_gen_audio_get_info(s->media).type != MTMD_GEN_AUDIO_TYPE_NONE;
         s->context = llama_init_from_model(s->model, params);
@@ -127,6 +134,7 @@ extern "C" JNIEXPORT void JNICALL Java_app_lfm3_probe_inference_NativeLlama_begi
     std::lock_guard<std::mutex> guard(lock);
     try {
         auto & s = ready();
+        const auto prefill_start = Clock::now();
         s.ticket = ticket;
         if (output_limit < 1 || output_limit > s.context_limit / 2) throw std::runtime_error("Output limit exceeds half the loaded context. Adjust settings or reload the model.");
         s.output_limit = output_limit;
@@ -154,7 +162,7 @@ ws ::= [ \t\n]{0,4}
             llama_sampler_chain_add(s.sampler, constraint);
         }
         llama_sampler_chain_add(s.sampler, llama_sampler_init_greedy());
-        s.position = 0; s.tokens = 0; s.nanos = 0;
+        s.position = 0; s.tokens = 0; s.nanos = 0; s.prefill_nanos = 0;
         int count = env->GetArrayLength(contents);
         if (count != env->GetArrayLength(roles) || count < 1 || count > 201) throw std::runtime_error("Invalid chat history.");
         std::vector<std::string> text, role;
@@ -212,14 +220,14 @@ ws ::= [ \t\n]{0,4}
             if (mtmd_tokenize(s.media, chunks.get(), &input, bitmaps.data(), bitmaps.size()) != 0) throw std::runtime_error("Multimodal preprocessing failed.");
             const int reserve = s.output_limit + (s.speech ? (int) prefix.size() + 2 : 0);
             if (mtmd_helper_get_n_pos(chunks.get()) + reserve > s.context_limit) throw std::runtime_error("Media and output exceed context. Increase context, shorten audio, or start a new chat.");
-            if (mtmd_helper_eval_chunks(s.media, s.context, chunks.get(), 0, 0, BATCH, true, &s.position) != 0) throw std::runtime_error(abort_cpu(&s) ? "Response stopped." : "Multimodal encoding failed.");
+            if (mtmd_helper_eval_chunks(s.media, s.context, chunks.get(), 0, 0, s.batch_size, true, &s.position) != 0) throw std::runtime_error(abort_cpu(&s) ? "Response stopped." : "Multimodal encoding failed.");
         } else {
         if (n_media) throw std::runtime_error("Load a multimodal pack for attachments.");
         int n = -llama_tokenize(vocab, prompt.data(), prompt.size(), nullptr, 0, true, true);
         if (n <= 0 || n + s.output_limit > s.context_limit) throw std::runtime_error("Context limit reached including output. Start a new chat or increase context and reload.");
         std::vector<llama_token> tokens(n);
         if (llama_tokenize(vocab, prompt.data(), prompt.size(), tokens.data(), n, true, true) != n) throw std::runtime_error("Tokenization failed.");
-        for (int i = 0; i < n; i += BATCH) { if (cancelled) throw std::runtime_error("Response stopped."); process(s, tokens.data() + i, std::min(BATCH, n - i)); }
+        for (int i = 0; i < n; i += s.batch_size) { if (cancelled) throw std::runtime_error("Response stopped."); process(s, tokens.data() + i, std::min(s.batch_size, n - i)); }
         }
         if (s.speech) {
             auto input = mtmd_helper_gen_audio_inp_default();
@@ -228,7 +236,7 @@ ws ::= [ \t\n]{0,4}
             input.out_mode = speak ? MTMD_HELPER_GEN_AUDIO_OUT_MIXED : MTMD_HELPER_GEN_AUDIO_OUT_TEXT;
             if (mtmd_helper_gen_audio_set_input(s.speech, &input) != 0) throw std::runtime_error("Audio response initialization failed.");
             int ret;
-            while ((ret = mtmd_helper_gen_audio_step_prompt(s.speech, BATCH)) > 0) { if (abort_cpu(&s)) throw std::runtime_error("Response stopped."); }
+            while ((ret = mtmd_helper_gen_audio_step_prompt(s.speech, s.batch_size)) > 0) { if (abort_cpu(&s)) throw std::runtime_error("Response stopped."); }
             if (ret < 0) throw std::runtime_error("Audio response prefill failed.");
             const float * h = llama_get_embeddings_ith(s.context, -1);
             if (!h) throw std::runtime_error("Missing hidden state for speech generation.");
@@ -238,6 +246,7 @@ ws ::= [ \t\n]{0,4}
             if (n_bias) llama_sampler_chain_add(s.sampler, llama_sampler_init_logit_bias(llama_vocab_n_tokens(vocab), n_bias, bias));
             llama_sampler_chain_add(s.sampler, llama_sampler_init_greedy());
         }
+        s.prefill_nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - prefill_start).count();
     } catch (const std::exception & e) { error(env, e.what()); }
 }
 
@@ -280,8 +289,9 @@ extern "C" JNIEXPORT jbyteArray JNICALL Java_app_lfm3_probe_inference_NativeLlam
 
 extern "C" JNIEXPORT jlongArray JNICALL Java_app_lfm3_probe_inference_NativeLlama_usage(JNIEnv * env, jobject) {
     std::lock_guard<std::mutex> guard(lock);
-    jlong stats[3] = {session ? session->tokens : 0, session ? session->nanos : 0, session && session->limited ? 1 : 0};
-    auto out = env->NewLongArray(3); env->SetLongArrayRegion(out, 0, 3, stats); return out;
+    jlong stats[5] = {session ? session->tokens : 0, session ? session->nanos : 0, session && session->limited ? 1 : 0,
+        session ? session->prefill_nanos : 0, kleidiai_buffer_seen ? 1 : 0};
+    auto out = env->NewLongArray(5); env->SetLongArrayRegion(out, 0, 5, stats); return out;
 }
 
 extern "C" JNIEXPORT jfloatArray JNICALL Java_app_lfm3_probe_inference_NativeLlama_audio(JNIEnv * env, jobject) {

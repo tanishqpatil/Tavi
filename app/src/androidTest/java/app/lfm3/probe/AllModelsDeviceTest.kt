@@ -33,6 +33,7 @@ class AllModelsDeviceTest {
         val app = context.applicationContext as TaviApplication
         val pack = ModelCatalog.get(checkNotNull(args.getString("packId")))
         val contextTokens = args.getString("contextTokens")?.toIntOrNull() ?: 4096
+        val cpu = CpuOptions(args.getString("cpuThreads")?.toInt() ?: 4, args.getString("prefillThreads")?.toInt() ?: 4, args.getString("prefillBatch")?.toInt() ?: 128)
         require(contextTokens in GenerationLimits.contexts)
         val root = File(context.noBackupFilesDir, "models")
         val installer = PackInstaller(root, pack = pack)
@@ -41,6 +42,7 @@ class AllModelsDeviceTest {
         val reportFile = File(reportDir, "${pack.id}.json")
         val cases = JSONArray()
         val report = JSONObject().put("pack", pack.id).put("revision", pack.revision).put("context", contextTokens)
+            .put("kleidiai_compiled", BuildConfig.CPU_KLEIDIAI_COMPILED).put("cpu_threads", cpu.threads).put("prefill_threads", cpu.prefillThreads).put("prefill_batch", cpu.batch)
             .put("environment", "ARM64 Android emulator; not phone performance/quality qualification")
             .put("cases", cases).put("stage", "starting")
         fun checkpoint() { reportFile.writeText(report.toString(2)) }
@@ -91,6 +93,7 @@ class AllModelsDeviceTest {
             usage?.let { result.put("tokens", it.outputTokens).put("decode_nanos", it.decodeNanos)
                 .put("audio_samples", it.audioSamples).put("audio_rate", it.audioRate).put("audio_peak", it.audioPeak.toDouble())
                 .put("first_decoded_audio_ms", it.firstAudioMs ?: JSONObject.NULL) }
+            usage?.let { result.put("prefill_nanos", it.prefillNanos).put("optimized_cpu_buffer", it.optimizedCpuBuffer) }
             return Reply(body, usage, limited)
         }
         fun photo(color: Int): RequestPart.Image {
@@ -127,7 +130,7 @@ class AllModelsDeviceTest {
             check(installer.verifyInstalled())
             report.put("stage", "testing"); checkpoint()
             testCase("load_and_capabilities") { result ->
-                engine.info(); engine.load(pack, contextTokens); loaded = true
+                engine.info(); engine.load(pack, contextTokens, cpu); loaded = true
                 val expected = pack.capabilities.map { when (it) {
                     ModelCapability.TEXT -> Capability.TEXT; ModelCapability.PHOTO -> Capability.IMAGE
                     ModelCapability.VOICE_INPUT -> Capability.AUDIO_INPUT; ModelCapability.VOICE_OUTPUT -> Capability.AUDIO_OUTPUT

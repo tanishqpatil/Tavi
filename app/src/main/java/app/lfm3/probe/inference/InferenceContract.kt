@@ -48,7 +48,8 @@ sealed interface InferenceEvent {
     /** Exact output-token count and decode duration reported by the runtime, never word estimates. */
     data class Usage(val turnId: Long, val outputTokens: Int, val decodeNanos: Long,
                      val audioSamples: Long = 0, val audioRate: Int = 0, val audioPeak: Float = 0f,
-                     val firstAudioMs: Long? = null) : InferenceEvent
+                     val firstAudioMs: Long? = null, val prefillNanos: Long = 0,
+                     val optimizedCpuBuffer: Boolean = false) : InferenceEvent
     data class TextDelta(val turnId: Long, val value: String) : InferenceEvent
     data class Completed(val turnId: Long, val outputLimitReached: Boolean = false) : InferenceEvent
     data class Failed(val turnId: Long, val reason: String) : InferenceEvent

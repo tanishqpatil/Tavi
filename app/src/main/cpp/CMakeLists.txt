@@ -12,7 +12,20 @@ set(LLAMA_BUILD_MTMD ON CACHE BOOL "" FORCE)
 set(MTMD_VIDEO OFF CACHE BOOL "" FORCE)
 set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
 set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
-set(GGML_CPU_KLEIDIAI OFF CACHE BOOL "" FORCE)
+option(TAVI_KLEIDIAI "Compile portable, runtime-dispatched CPU kernels" OFF)
+set(GGML_CPU_KLEIDIAI ${TAVI_KLEIDIAI} CACHE BOOL "" FORCE)
+if (TAVI_KLEIDIAI)
+    include(FetchContent)
+    set(TAVI_KLEIDIAI_URL https://github.com/ARM-software/kleidiai/releases/download/v1.32.0/kleidiai-v1.32.0-src.tar.gz)
+    if (DEFINED ENV{TAVI_KLEIDIAI_ARCHIVE})
+        set(TAVI_KLEIDIAI_URL "$ENV{TAVI_KLEIDIAI_ARCHIVE}")
+    endif()
+    # First declaration wins over the upstream MD5-only declaration.
+    FetchContent_Declare(kleidiai
+        URL "${TAVI_KLEIDIAI_URL}"
+        URL_HASH SHA256=a48d373e7c5d721a0aecbf5ddaf0bdf245bc8064e6b84086f13db0e102b553a6
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+endif()
 set(GGML_BACKEND_DL OFF CACHE BOOL "" FORCE)
 set(GGML_CPU_ARM_ARCH "armv8-a" CACHE STRING "" FORCE)
 add_subdirectory(../../../../native/llama.cpp llama-build)

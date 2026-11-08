@@ -5,7 +5,7 @@ object NativeLlama {
     init { System.loadLibrary("tavi") }
     external fun info(): String
     external fun prepare(): Long
-    external fun load(path: String, contextTokens: Int = 1024, projector: String = "")
+    external fun load(path: String, contextTokens: Int = 1024, projector: String = "", threads: Int = 4, prefillThreads: Int = 4, batch: Int = 128)
     external fun unload()
     external fun begin(contents: Array<ByteArray>, roles: Array<String>, ticket: Long, outputLimit: Int = 128, mediaFiles: Array<String> = emptyArray(), speak: Boolean = false, routingJson: Boolean = false)
     external fun next(): ByteArray?

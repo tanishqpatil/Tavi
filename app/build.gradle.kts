@@ -19,7 +19,9 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk { abiFilters += "arm64-v8a" }
-        externalNativeBuild { cmake { arguments += listOf("-DCMAKE_BUILD_TYPE=Release", "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON") } }
+        val kleidi = providers.gradleProperty("taviKleidiAi").orElse("false").get().also { require(it in setOf("true", "false")) }.toBoolean()
+        buildConfigField("boolean", "CPU_KLEIDIAI_COMPILED", kleidi.toString())
+        externalNativeBuild { cmake { arguments += listOf("-DCMAKE_BUILD_TYPE=Release", "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON", "-DTAVI_KLEIDIAI=${if (kleidi) "ON" else "OFF"}") } }
     }
 
     buildFeatures {

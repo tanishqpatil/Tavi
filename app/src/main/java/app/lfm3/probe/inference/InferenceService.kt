@@ -53,6 +53,7 @@ class InferenceService : Service() {
                         check(!engine.loaded) { "Unload the active model before loading another pack." }
                         val pack = ModelCatalog.get(checkNotNull(args.getString("pack")))
                         val context = args.getInt("context"); require(context in GenerationLimits.contexts)
+                        val cpu = CpuOptions(args.getInt("cpuThreads", 4), args.getInt("prefillThreads", 4), args.getInt("prefillBatch", 128))
                         val root = File(noBackupFilesDir, "models")
                         val installer = PackInstaller(root, pack = pack)
                         lease = PackLease.acquire(root, pack, shared = true)
@@ -60,7 +61,7 @@ class InferenceService : Service() {
                             check(installer.verifyInstalled()) { "Model pack failed verification. Remove and download it again." }
                             ensureActive()
                             engine.load(File(installer.installed, pack.weights.name).path, context,
-                                pack.projector?.let { File(installer.installed, it.name).path }.orEmpty(), pack)
+                                pack.projector?.let { File(installer.installed, it.name).path }.orEmpty(), pack, cpu)
                         } catch (error: Exception) { lease?.close(); lease = null; throw error }
                         terminal = InferenceWire.data(id, "ok")
                     }
@@ -84,6 +85,7 @@ class InferenceService : Service() {
                                 usage?.let {
                                     putInt("tokens", it.outputTokens); putLong("nanos", it.decodeNanos)
                                     putLong("audioSamples", it.audioSamples); putInt("audioRate", it.audioRate); putFloat("audioPeak", it.audioPeak)
+                                    putLong("prefillNanos", it.prefillNanos); putBoolean("optimizedCpuBuffer", it.optimizedCpuBuffer)
                                     it.firstAudioMs?.let { first -> putLong("firstAudioMs", first) }
                                 }
                             })
