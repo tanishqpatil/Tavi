@@ -56,6 +56,9 @@ def verify(apk, tools, output):
         raise ValueError("APK application ID/version does not match the release configuration")
     if "application-debuggable" in badging:
         raise ValueError("Refusing to publish a debuggable APK")
+    manifest = command(str(tools / "aapt"), "dump", "xmltree", str(apk), "AndroidManifest.xml")
+    if "ShareFixture" in manifest or "sharefixture" in manifest:
+        raise ValueError("Refusing to publish test-only share components")
     if not re.search(r"^sdkVersion:'26'$", badging, re.M):
         raise ValueError("Unexpected minimum Android SDK")
     with zipfile.ZipFile(apk) as archive:
@@ -84,6 +87,8 @@ def verify(apk, tools, output):
         "Download the ARM64 APK below; no GitHub login or Actions artifact ZIP is needed. "
         "Android 8+ required. Download models inside Tavi.\n\n"
         "Local LFM3 text chat, private history, model manager and optional keyless web search/MCP. "
+        "Reviewed Android text/photo sharing, persistent draft attachments, previewed phone diagnostics "
+        "and stop-on-audio-interruption are included. "
         "Online tools are off by default. Photo/voice paths are experimental and require phone testing. "
         "No physical-device RAM/performance tier is qualified.\n\n"
         "This APK uses the stable Tavi release signing key. It cannot update an existing debug APK "

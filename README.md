@@ -122,7 +122,7 @@ Debug APK: `app/build/outputs/apk/debug/app-debug.apk`.
 
 ### Publishing a signed release
 
-The [Signed Android release workflow](https://github.com/tanishqpatil/Tavi/actions/workflows/release.yml) runs on `v*` tags or a manual run targeting an existing version tag. Set `taviVersionName` and an increased `taviVersionCode` in `gradle.properties`, commit/push to `main`, then create/push the matching tag (for example `v0.1.0-alpha.1`). The workflow verifies that the tag matches the source version and is on `main` history.
+The [Signed Android release workflow](https://github.com/tanishqpatil/Tavi/actions/workflows/release.yml) runs on `v*` tags or a manual run targeting an existing version tag. Set `taviVersionName` and an increased `taviVersionCode` in `gradle.properties`, commit/push to `main`, then create/push the matching tag (for example `v0.1.0-alpha.2`). The workflow verifies that the tag matches the source version and is on `main` history.
 
 Repository secrets: `TAVI_SIGNING_KEYSTORE_BASE64` (PKCS12), `TAVI_SIGNING_STORE_PASSWORD`, `TAVI_SIGNING_KEY_ALIAS`, and `TAVI_SIGNING_KEY_PASSWORD`. Private signing material is never committed or uploaded as an artifact. Local signed builds read `TAVI_SIGNING_KEYSTORE` (file path) and the three password/alias environment variables; without them, a local release build is unsigned and cannot pass publication verification.
 
