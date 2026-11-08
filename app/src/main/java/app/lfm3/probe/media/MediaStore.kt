@@ -15,6 +15,7 @@ import java.util.UUID
 
 /** Durable no-backup attachments, addressed only by app-generated tokens. */
 class MediaStore(private val context: Context) {
+    internal val applicationContext get() = context.applicationContext
     val directory = File(context.noBackupFilesDir, "session-media").apply {
         mkdirs()
     }

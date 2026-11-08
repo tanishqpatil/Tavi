@@ -75,6 +75,8 @@ For media tests, consider a 4,096-token context and a 256-token output cap as a 
 
 Photos are normalized to a maximum 1,024-pixel edge with orientation handling; audio is recorded as 16 kHz mono WAV. Required media references are replayed in follow-ups rather than replaced with captions. Sessions allow up to eight media attachments; start a new chat when context is full. Audio routing, interruption handling, latency, codec quality and same-turn photo/voice correctness still need physical-device validation.
 
+Generated speech requests transient Android audio focus before playback. Focus loss (including duck requests) or an audio-becoming-noisy event stops the response and flushes playback; regaining focus never automatically replays it. Each response releases its listener/focus lease, and late callbacks are fenced from later responses. Emulator focus-loss/cancellation tests pass; real calls, Bluetooth/headphone routing and speech quality still need phone checks.
+
 Tavi is the project owner's selected name. Other products use this name; no trademark clearance or vendor endorsement is claimed. The technical development application ID remains `app.lfm3.probe` to preserve existing installs.
 
 ## Build

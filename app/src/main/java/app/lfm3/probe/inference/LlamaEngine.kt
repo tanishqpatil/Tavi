@@ -23,7 +23,7 @@ class LlamaEngine(private val mediaStore: MediaStore? = null) : InferenceEngine 
     @Volatile var generating = false
         private set
     @Volatile private var pack: ModelPack = ModelCatalog.text
-    private val playback = AudioPlayback()
+    private val playback = AudioPlayback(mediaStore?.applicationContext) { NativeLlama.cancel() }
     override val descriptor get() = InferenceWire.descriptor(pack)
     override fun prepare() = NativeLlama.prepare()
     override fun cancel() { NativeLlama.cancel(); playback.interrupt() }
@@ -55,6 +55,7 @@ class LlamaEngine(private val mediaStore: MediaStore? = null) : InferenceEngine 
             require(media.none { it is RequestPart.Audio } || Capability.AUDIO_INPUT in descriptor.capabilities) { "This pack does not support recorded voice." }
             generating = true
             try {
+                playback.prepare()
                 currentCoroutineContext().ensureActive()
                 val messages = (if (request.systemInstruction.isNotEmpty()) listOf(ChatMessage("system", request.systemInstruction)) else emptyList()) + request.history + ChatMessage("user", request.parts.filterIsInstance<RequestPart.Text>().joinToString("\n") { it.value }, media)
                 val references = messages.flatMap { it.media }.map { when (it) {
