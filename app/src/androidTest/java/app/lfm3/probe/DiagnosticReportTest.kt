@@ -27,13 +27,16 @@ class DiagnosticReportTest {
             log.writeText("2026-11-08T00:00:00Z APP_STARTED\n2026-11-08T00:00:01Z PRIVATE_CANARY\n2026-11-08T00:00:02Z https://private.example/key\ninvalid-time APP_STARTED\n2026-11-08T00:00:03Z DOWNLOAD_HTTP_503_OFFSET_123\n")
             val report = DiagnosticReport.collect(context,
                 RuntimeState(message = "PRIVATE_CANARY /private/path", selectedId = "PRIVATE_CANARY", loadedId = "PRIVATE_CANARY", nativeInfo = "PRIVATE_CANARY"),
-                GenerationLimits(2048, 256), GenerationMetrics(12, 2_000_000_000, 100),
+                GenerationLimits(2048, 256), GenerationMetrics(12, 2_000_000_000, 100, 48_000, 24_000, 750),
                 OnlineConfig(mcpUrl = "https://private.example/key", enabledTools = setOf("PRIVATE_CANARY")))
             assertFalse(report.contains("PRIVATE_CANARY")); assertFalse(report.contains("private.example")); assertFalse(report.contains(root.path))
             val value = JSONObject(report)
             assertEquals(2, value.getJSONArray("events").length())
             assertEquals(2048, value.getJSONObject("generation").getInt("selected_context_tokens"))
             assertEquals(2_000_000_000L, value.getJSONObject("generation").getLong("last_decode_nanos"))
+            assertEquals(48_000L, value.getJSONObject("generation").getLong("last_audio_samples"))
+            assertEquals(24_000, value.getJSONObject("generation").getInt("last_audio_rate"))
+            assertEquals(750L, value.getJSONObject("generation").getLong("last_first_audio_ms"))
             assertTrue(value.getJSONObject("memory").getLong("system_total_bytes") > 0)
             assertTrue(value.getJSONObject("device").getLong("page_size_bytes") > 0)
             assertEquals("none", value.getJSONObject("runtime").getString("loaded_pack"))

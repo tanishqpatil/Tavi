@@ -183,6 +183,15 @@ ws ::= [ \t\n]{0,4}
             prefix = prompt.substr(base.size()); prompt = std::move(base);
         }
         auto vocab = llama_model_get_vocab(s.model);
+        // LFM3's Jinja template starts with bos_token, while the built-in ChatML renderer
+        // omits it. These GGUFs disable automatic BOS insertion, so restore the template's
+        // explicit prefix once (after splitting the assistant continuation for the codec).
+        if (!llama_vocab_get_add_bos(vocab)) {
+            const auto bos = llama_vocab_bos(vocab);
+            const char * spelling = bos == LLAMA_TOKEN_NULL ? nullptr : llama_vocab_get_text(vocab, bos);
+            if (!spelling || !*spelling) throw std::runtime_error("LFM3 beginning-of-sequence token is missing.");
+            if (prompt.compare(0, std::strlen(spelling), spelling) != 0) prompt.insert(0, spelling);
+        }
         const int n_media = env->GetArrayLength(media_files);
         if (n_media > 8) throw std::runtime_error("This session exceeds eight media attachments. Start a new chat.");
         if (s.media) {

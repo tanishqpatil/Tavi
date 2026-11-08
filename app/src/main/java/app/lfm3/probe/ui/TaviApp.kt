@@ -399,6 +399,9 @@ private fun DeveloperPanel(state: ProbeUiState) {
             }
             if (expanded) {
                 Text("Engine  ${state.engineName}\nTokens  ${state.metrics.outputTokens ?: "unavailable"}\nFirst text  ${state.metrics.firstTextMs?.let { "$it ms" } ?: "—"}", style = MaterialTheme.typography.labelSmall)
+                if (state.metrics.audioSamples != null && state.metrics.audioRate != null) Text(
+                    "Generated speech  ${String.format(Locale.ROOT, "%.2f", state.metrics.audioSamples.toDouble() / state.metrics.audioRate)} s · ${state.metrics.audioRate} Hz\nFirst decoded audio  ${state.metrics.firstAudioMs ?: "—"} ms",
+                    style = MaterialTheme.typography.labelSmall)
                 Text("${if (state.isGenerating) "● Streaming" else "○ Idle"} · ${if (state.realInference) "exact runtime token counts" else "tokenizer metrics unavailable in preview"}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 state.trace.takeLast(5).forEach { Text("› $it", style = MaterialTheme.typography.labelSmall) }
             }

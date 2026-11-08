@@ -142,7 +142,9 @@ class RemoteLlamaEngine(context: Context, private val onDeath: () -> Unit = {}) 
                     "batch" -> {
                         val text = event.getString("text").orEmpty(); require(text.length <= 8192)
                         if (text.isNotEmpty()) emit(InferenceEvent.TextDelta(request.turnId, text))
-                        if (event.containsKey("tokens")) emit(InferenceEvent.Usage(request.turnId, event.getInt("tokens"), event.getLong("nanos")))
+                        if (event.containsKey("tokens")) emit(InferenceEvent.Usage(request.turnId, event.getInt("tokens"), event.getLong("nanos"),
+                            event.getLong("audioSamples"), event.getInt("audioRate"), event.getFloat("audioPeak"),
+                            if (event.containsKey("firstAudioMs")) event.getLong("firstAudioMs") else null))
                         send(target, InferenceWire.ACK, InferenceWire.data(id, "ack").apply { putLong("sequence", event.getLong("sequence")) })
                     }
                     "done" -> { terminal = true; emit(InferenceEvent.Completed(request.turnId, event.getBoolean("limit"))); break }

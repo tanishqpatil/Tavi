@@ -81,14 +81,18 @@ class InferenceService : Service() {
                             withContext(Dispatchers.Main) { acknowledgement = serial to ack }
                             respond(reply, InferenceWire.data(id, "batch").apply {
                                 putLong("sequence", serial); putString("text", text.toString()); putLong("turn", request.turnId)
-                                usage?.let { putInt("tokens", it.outputTokens); putLong("nanos", it.decodeNanos) }
+                                usage?.let {
+                                    putInt("tokens", it.outputTokens); putLong("nanos", it.decodeNanos)
+                                    putLong("audioSamples", it.audioSamples); putInt("audioRate", it.audioRate); putFloat("audioPeak", it.audioPeak)
+                                    it.firstAudioMs?.let { first -> putLong("firstAudioMs", first) }
+                                }
                             })
                             withTimeout(15_000) { ack.await() }
                             text = StringBuilder(); usage = null; last = System.nanoTime()
                         }
                         engine.generate(request) { event -> when (event) {
                             is InferenceEvent.TextDelta -> { text.append(event.value); if (text.length >= 1024 || System.nanoTime() - last >= 40_000_000) flush() }
-                            is InferenceEvent.Usage -> usage = event
+                            is InferenceEvent.Usage -> { usage = event; if (System.nanoTime() - last >= 250_000_000) flush() }
                             is InferenceEvent.Completed -> { flush(); terminal = InferenceWire.data(id, "done").apply { putBoolean("limit", event.outputLimitReached) } }
                             is InferenceEvent.Failed -> error(event.reason)
                         } }

@@ -81,7 +81,7 @@ def verify(apk, tools, output):
         f"Application ID: app.lfm3.probe\nABI: arm64-v8a\nMinimum Android: 8 (API 26)\n"
         f"Release certificate SHA-256: {expected}\nDebuggable: false\n"
         "APK signature and 16 KB ZIP alignment verified. No model weights included.\n"
-        "Text inference is emulator-tested; photo/voice and physical-device performance remain experimental.\n")
+        "All four packs have synthetic real-model emulator checks; camera/microphone hardware, speech quality and phone performance remain experimental.\n")
     (output / "RELEASE-NOTES.txt").write_text(
         f"Tavi {name} — {'development prerelease' if '-' in name else 'release'}\n\n"
         "Download the ARM64 APK below; no GitHub login or Actions artifact ZIP is needed. "
@@ -89,7 +89,11 @@ def verify(apk, tools, output):
         "Local LFM3 text chat, private history, model manager and optional keyless web search/MCP. "
         "Reviewed Android text/photo sharing, persistent draft attachments, previewed phone diagnostics "
         "and stop-on-audio-interruption are included. "
+        "This version fixes the missing LFM3 template BOS prefix and the default mixed-speech instruction. "
+        "All four packs have synthetic emulator checks, including combined photo/voice/speech and cancellation. "
+        "Developer view includes generated-speech duration/rate and first decoded audio timing. "
         "Online tools are off by default. Photo/voice paths are experimental and require phone testing. "
+        "Speech generation was slower than real time on the emulator; no phone speedup is claimed. "
         "No physical-device RAM/performance tier is qualified.\n\n"
         "This APK uses the stable Tavi release signing key. It cannot update an existing debug APK "
         "signed with a different key. Export conversations first if you choose to uninstall that build; "

@@ -56,8 +56,22 @@ class LlamaEngine(private val mediaStore: MediaStore? = null) : InferenceEngine 
             generating = true
             try {
                 playback.prepare()
+                val started = System.nanoTime()
+                var audioSamples = 0L
+                var audioRate = 0
+                var audioPeak = 0f
+                var firstAudioMs: Long? = null
+                suspend fun usage() {
+                    val stats = NativeLlama.usage()
+                    emit(InferenceEvent.Usage(request.turnId, stats[0].toInt(), stats[1], audioSamples, audioRate, audioPeak, firstAudioMs))
+                }
                 currentCoroutineContext().ensureActive()
-                val messages = (if (request.systemInstruction.isNotEmpty()) listOf(ChatMessage("system", request.systemInstruction)) else emptyList()) + request.history + ChatMessage("user", request.parts.filterIsInstance<RequestPart.Text>().joinToString("\n") { it.value }, media)
+                // LiquidAI's voice-chat contract asks for mixed output through both the prompt and codec mode.
+                val speak = request.speakResponse && Capability.AUDIO_OUTPUT in descriptor.capabilities
+                val instruction = request.systemInstruction.ifEmpty {
+                    if (speak) "Respond with interleaved text and audio." else ""
+                }
+                val messages = (if (instruction.isNotEmpty()) listOf(ChatMessage("system", instruction)) else emptyList()) + request.history + ChatMessage("user", request.parts.filterIsInstance<RequestPart.Text>().joinToString("\n") { it.value }, media)
                 val references = messages.flatMap { it.media }.map { when (it) {
                     is RequestPart.Image -> it.privateReference; is RequestPart.Audio -> it.privateReference
                     is RequestPart.Text -> error("Invalid media part.")
@@ -65,7 +79,7 @@ class LlamaEngine(private val mediaStore: MediaStore? = null) : InferenceEngine 
                 require(references.size <= 8) { "Eight media attachments per session maximum. Start a new chat." }
                 val paths = references.map { checkNotNull(mediaStore) { "Private media storage unavailable." }.resolve(it).absolutePath }.toTypedArray()
                 val contents = messages.map { (it.text + "\n<__media__>".repeat(it.media.size)).toByteArray(Charsets.UTF_8) }.toTypedArray()
-                NativeLlama.begin(contents, messages.map { it.role }.toTypedArray(), request.generationTicket, request.outputLimit, paths, request.speakResponse, request.routingJson)
+                NativeLlama.begin(contents, messages.map { it.role }.toTypedArray(), request.generationTicket, request.outputLimit, paths, speak, request.routingJson)
                 // Token pieces may split UTF-8 characters. Preserve incomplete bytes until the next piece.
                 val decoder = Charsets.UTF_8.newDecoder()
                 val bytes = ByteBuffer.allocate(8192)
@@ -73,7 +87,13 @@ class LlamaEngine(private val mediaStore: MediaStore? = null) : InferenceEngine 
                 while (true) {
                     currentCoroutineContext().ensureActive()
                     val piece = NativeLlama.next()
-                    NativeLlama.audio()?.takeIf { it.isNotEmpty() }?.let { playback.write(it, NativeLlama.audioRate()) }
+                    NativeLlama.audio()?.takeIf { it.isNotEmpty() }?.let { pcm ->
+                        if (firstAudioMs == null) firstAudioMs = (System.nanoTime() - started) / 1_000_000
+                        audioRate = NativeLlama.audioRate()
+                        audioSamples += pcm.size
+                        audioPeak = maxOf(audioPeak, pcm.maxOf { kotlin.math.abs(it) })
+                        playback.write(pcm, audioRate)
+                    }
                     if (piece == null) break
                     bytes.put(piece); bytes.flip(); chars.clear()
                     val result = decoder.decode(bytes, chars, false)
@@ -81,11 +101,11 @@ class LlamaEngine(private val mediaStore: MediaStore? = null) : InferenceEngine 
                     bytes.compact(); chars.flip()
                     val text = chars.toString()
                     if (text.isNotEmpty()) emit(InferenceEvent.TextDelta(request.turnId, text))
-                    val stats = NativeLlama.usage()
-                    emit(InferenceEvent.Usage(request.turnId, stats[0].toInt(), stats[1]))
+                    usage()
                 }
                 currentCoroutineContext().ensureActive()
                 playback.finish()
+                usage() // Includes the final codec tail flushed by the terminal native step.
                 emit(InferenceEvent.Completed(request.turnId, NativeLlama.usage()[2] != 0L))
             } catch (e: IllegalStateException) {
                 if (e.message == "Response stopped.") throw CancellationException("Response stopped.").apply { initCause(e) }

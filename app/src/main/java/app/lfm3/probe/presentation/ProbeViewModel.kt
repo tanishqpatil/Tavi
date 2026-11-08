@@ -361,7 +361,8 @@ class ProbeViewModel(
         when (event) {
             is InferenceEvent.Usage -> {
                 if (event.outputTokens >= 0 && event.decodeNanos > 0) _state.update {
-                    it.copy(metrics = it.metrics.copy(outputTokens = event.outputTokens, decodeNanos = event.decodeNanos))
+                    it.copy(metrics = it.metrics.copy(outputTokens = event.outputTokens, decodeNanos = event.decodeNanos,
+                        audioSamples = event.audioSamples.takeIf { count -> count > 0 }, audioRate = event.audioRate.takeIf { rate -> rate > 0 }, firstAudioMs = event.firstAudioMs))
                 }
             }
             is InferenceEvent.TextDelta -> _state.update { state ->
@@ -414,7 +415,8 @@ data class ProbeUiState(
     val shareImportError: String? = null,
 )
 
-data class GenerationMetrics(val outputTokens: Int? = null, val decodeNanos: Long? = null, val firstTextMs: Long? = null) {
+data class GenerationMetrics(val outputTokens: Int? = null, val decodeNanos: Long? = null, val firstTextMs: Long? = null,
+                             val audioSamples: Long? = null, val audioRate: Int? = null, val firstAudioMs: Long? = null) {
     val tokensPerSecond: Double? get() = if (outputTokens != null && decodeNanos != null && decodeNanos > 0) outputTokens * 1_000_000_000.0 / decodeNanos else null
 }
 
