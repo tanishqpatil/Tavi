@@ -23,6 +23,7 @@ data class SavedConversation(
     val id: String = UUID.randomUUID().toString(), val title: String = "New conversation",
     val turns: List<ProbeTurn> = emptyList(), val real: Boolean = false,
     val engine: String = "deterministic-preview", val draft: String = "", val speak: Boolean = false,
+    val draftMedia: List<RequestPart> = emptyList(),
 )
 
 /** Private, transactional history. Only the active message page and library page enter UI memory. */
@@ -39,12 +40,14 @@ class ConversationRepository(context: Context) {
 
     suspend fun save(chat: SavedConversation) = access { db ->
         require(chat.title.length <= 120 && chat.draft.length <= 8_000)
+        validateDraftMedia(chat.draftMedia)
         db.beginTransaction()
         try {
             val metadata = ContentValues().apply {
                 put("id", chat.id); put("title", chat.title); put("updated", System.currentTimeMillis())
                 put("real", if (chat.real) 1 else 0); put("engine", chat.engine)
                 put("draft", chat.draft); put("speak", if (chat.speak) 1 else 0)
+                put("draft_media", encodeMedia(chat.draftMedia).toString())
             }
             // Update instead of REPLACE: replacing a parent would cascade-delete its older pages.
             if (db.update("conversations", metadata, "id=?", arrayOf(chat.id)) == 0) db.insertOrThrow("conversations", null, metadata)
@@ -95,7 +98,8 @@ class ConversationRepository(context: Context) {
                 } }
             }
             SavedConversation(id, c.string("title"), turns, c.getInt(c.getColumnIndexOrThrow("real")) != 0,
-                c.string("engine"), c.string("draft"), c.getInt(c.getColumnIndexOrThrow("speak")) != 0)
+                c.string("engine"), c.string("draft"), c.getInt(c.getColumnIndexOrThrow("speak")) != 0,
+                decodeMedia(JSONArray(c.string("draft_media"))).also(::validateDraftMedia))
         }
     }
 
@@ -108,30 +112,38 @@ class ConversationRepository(context: Context) {
     }
     suspend fun delete(id: String) = access { it.delete("conversations", "id=?", arrayOf(id)) }
     suspend fun references(): Set<String> = access { db ->
-        db.rawQuery("SELECT media FROM messages WHERE role='user'", null).use { c ->
+        val drafts = db.rawQuery("SELECT draft_media FROM conversations", null).use { c ->
             buildSet { while (c.moveToNext()) decodeMedia(JSONArray(c.getString(0))).forEach { add(reference(it)) } }
+        }
+        db.rawQuery("SELECT media FROM messages WHERE role='user'", null).use { c ->
+            buildSet { addAll(drafts); while (c.moveToNext()) decodeMedia(JSONArray(c.getString(0))).forEach { add(reference(it)) } }
         }
     }
 
     private class Database(context: Context) : SQLiteOpenHelper(context,
-        File(context.noBackupFilesDir, "history/conversations.db").apply { parentFile!!.mkdirs() }.path, null, 2) {
+        File(context.noBackupFilesDir, "history/conversations.db").apply { parentFile!!.mkdirs() }.path, null, 3) {
         init { setWriteAheadLoggingEnabled(true) }
         override fun onConfigure(db: SQLiteDatabase) { db.setForeignKeyConstraintsEnabled(true) }
         override fun onCreate(db: SQLiteDatabase) {
             db.execSQL("""CREATE TABLE conversations(id TEXT PRIMARY KEY,title TEXT NOT NULL,updated INTEGER NOT NULL,
-                real INTEGER NOT NULL,engine TEXT NOT NULL,draft TEXT NOT NULL,speak INTEGER NOT NULL)""")
+                real INTEGER NOT NULL,engine TEXT NOT NULL,draft TEXT NOT NULL,speak INTEGER NOT NULL,draft_media TEXT NOT NULL DEFAULT '[]')""")
             db.execSQL("""CREATE TABLE messages(chat TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
                 turn INTEGER NOT NULL,role TEXT NOT NULL CHECK(role IN ('user','assistant')),text TEXT NOT NULL,
                 status TEXT NOT NULL,media TEXT NOT NULL,receipt TEXT NOT NULL DEFAULT '',PRIMARY KEY(chat,turn,role))""")
             db.execSQL("CREATE INDEX conversations_updated ON conversations(updated DESC)")
         }
         override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-            if (oldVersion == 1 && newVersion == 2) db.execSQL("ALTER TABLE messages ADD COLUMN receipt TEXT NOT NULL DEFAULT ''")
-            else error("Unsupported history schema migration: $oldVersion to $newVersion")
+            check(oldVersion in 1..2 && newVersion == 3) { "Unsupported history schema migration: $oldVersion to $newVersion" }
+            if (oldVersion == 1) db.execSQL("ALTER TABLE messages ADD COLUMN receipt TEXT NOT NULL DEFAULT ''")
+            db.execSQL("ALTER TABLE conversations ADD COLUMN draft_media TEXT NOT NULL DEFAULT '[]'")
         }
     }
 
     companion object {
+        private fun validateDraftMedia(parts: List<RequestPart>) {
+            require(parts.size <= 2 && parts.none { it is RequestPart.Text } &&
+                parts.count { it is RequestPart.Image } <= 1 && parts.count { it is RequestPart.Audio } <= 1) { "Invalid draft attachments." }
+        }
         fun reference(part: RequestPart): String = when (part) {
             is RequestPart.Image -> part.privateReference; is RequestPart.Audio -> part.privateReference
             is RequestPart.Text -> error("Text is not an attachment")

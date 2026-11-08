@@ -9,18 +9,34 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.*
 import app.lfm3.probe.diagnostics.AppLog
 import app.lfm3.probe.ui.*
+import android.content.Intent
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.lfm3.probe.sharing.ShareInbox
 
 class MainActivity : ComponentActivity() {
+    private val shares by lazy { ViewModelProvider(this)[ShareInbox::class.java] }
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        shares.receive(intent)
+    }
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean("share_handled", shares.handled)
+        super.onSaveInstanceState(outState)
+    }
     override fun onStart() {
         super.onStart()
         (application as TaviApplication).downloads.reconcile()
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if ((savedInstanceState == null || !savedInstanceState.getBoolean("share_handled")) && shares.pending.value == null) shares.receive(intent)
         AppLog(applicationContext).record("APP_STARTED")
         enableEdgeToEdge()
         val preferences = TaviSettings(applicationContext)
         setContent {
+            val incoming by shares.pending.collectAsStateWithLifecycle()
             var theme by remember { mutableStateOf(preferences.theme) }
             var developer by remember { mutableStateOf(preferences.developer) }
             var reduceMotion by remember { mutableStateOf(preferences.reduceMotion) }
@@ -38,6 +54,7 @@ class MainActivity : ComponentActivity() {
                     onDeveloper = { developer = it; preferences.developer = it },
                     onReduceMotion = { reduceMotion = it; preferences.reduceMotion = it },
                     onLimits = { limits = it; preferences.limits = it },
+                    incoming = incoming, onDismissShare = shares::dismiss,
                 )
             }
         }

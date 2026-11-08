@@ -66,6 +66,12 @@ Enabling online tools sends the model's query/tool arguments to the chosen provi
 
 MCP support is deliberately limited to initialize-era protocol versions **2025-11-25 / 2025-06-18 / 2025-03-26**, JSON and request-scoped SSE, discovery and text tool results. It is not universal/latest-protocol compatibility. Flat primitive argument schemas only; unsupported tools stay disabled. OAuth/API keys, stdio subprocesses, write tools, subscriptions, sampling and server-initiated requests are not implemented. Broader agentic workflows remain internal analysis only.
 
+## Share into Tavi
+
+Choose **Tavi** in Android's share menu for plain text or one still photo. Review the content, then choose **Import as new draft**. Import preserves the previous conversation/draft and never sends a message, fetches a shared web URL or loads a model automatically. Send explicitly after selecting a compatible pack; photos need VL or Omni. Text is limited to 8,000 characters and photo imports to 20 MiB. Remote/file image URLs, multiple attachments and document parsing are not supported.
+
+Unsent photo/audio attachments are now saved with their private draft references and restored without replaying a recording. Switching chats restores each chat's own attachments. History archives include sent messages/attachments; unsent drafts are retained locally but are not included in those archives.
+
 ## Experimental phone testing
 
 For media tests, consider a 4,096-token context and a 256-token output cap as a starting experiment, then reload. This is not a memory/performance guarantee. Short recordings and a single photo are easier to diagnose first.

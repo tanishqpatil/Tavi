@@ -46,7 +46,7 @@ internal fun ConversationHistoryPage(state: ProbeUiState, model: ProbeViewModel,
             Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainerLow) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(chat.title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    Text("${chat.count} turns · ${if (chat.real) "Local model" else "Interface preview"} · ${DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(chat.updated))}", style = MaterialTheme.typography.bodySmall)
+                    Text("${chat.count} turns · ${if (chat.count == 0) "Unsent draft" else if (chat.real) "Local model" else "Interface preview"} · ${DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(chat.updated))}", style = MaterialTheme.typography.bodySmall)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         TextButton(onClick = { model.openConversation(chat.id); onOpen(chat.real) }, enabled = enabled) { Text("Open") }
                         TextButton(onClick = { selected = chat; title = chat.title }, enabled = enabled) { Text("Rename") }

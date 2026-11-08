@@ -1,0 +1,9 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- Test APK only: exercises a real cross-UID URI grant without private user media. -->
+        <provider android:name="app.lfm3.probe.ShareFixtureProvider"
+            android:authorities="app.lfm3.probe.test.sharefixture"
+            android:exported="false" android:grantUriPermissions="true" />
+        <activity android:name="app.lfm3.probe.ShareFixtureActivity" android:exported="true" />
+    </application>
+</manifest>

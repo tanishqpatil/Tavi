@@ -60,6 +60,7 @@ import app.lfm3.probe.models.TextPack
 import app.lfm3.probe.inference.GenerationLimits
 import app.lfm3.probe.presentation.*
 import java.util.Locale
+import app.lfm3.probe.sharing.IncomingShare
 
 private enum class Page(val title: String, val icon: String) {
     CHAT("Chat", "chat"), HISTORY("History", "history"), MODELS("Models", "models"), SETTINGS("Settings", "settings")
@@ -70,6 +71,7 @@ fun TaviApp(
     theme: ThemeChoice, developer: Boolean, reduceMotion: Boolean, limits: GenerationLimits,
     onTheme: (ThemeChoice) -> Unit, onDeveloper: (Boolean) -> Unit, onReduceMotion: (Boolean) -> Unit,
     onLimits: (GenerationLimits) -> Unit,
+    incoming: IncomingShare? = null, onDismissShare: (String) -> Unit = {},
 ) {
     val application = LocalContext.current.applicationContext as TaviApplication
     val runtime = application.runtime
@@ -98,6 +100,9 @@ fun TaviApp(
     var showPreview by rememberSaveable { mutableStateOf(false) }
     var clearConfirmation by remember { mutableStateOf(false) }
     var navigationExpanded by remember { mutableStateOf(false) }
+    LaunchedEffect(state.acceptedShareId) {
+        state.acceptedShareId?.let { onDismissShare(it); page = Page.CHAT; showPreview = false; model.consumeAcceptedShare(it) }
+    }
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
     ) { insets ->
@@ -128,7 +133,7 @@ fun TaviApp(
             Crossfade(page, animationSpec = tween(if (reduceMotion) 0 else 180), label = "page") { target ->
                 when (target) {
                     Page.CHAT -> ChatPage(state, model, developer, reduceMotion, showPreview, runtimeState,
-                        onModels = { page = Page.MODELS }, onPreview = { runtime.usePreview(); model.newChat(); showPreview = true })
+                        onModels = { page = Page.MODELS }, onPreview = { runtime.usePreview(); if (state.turns.isNotEmpty()) model.newChat(); showPreview = true })
                     Page.MODELS -> ModelsPage(runtimeState, state.isGenerating || state.isRecording || state.isImporting, runtime::select, runtime::download, runtime::pauseDownload, runtime::load, runtime::unload, runtime::remove, runtime::unmeteredDownloads)
                     Page.HISTORY -> ConversationHistoryPage(state, model, onOpen = { real -> if (!real && !runtimeState.loaded) runtime.usePreview(); page = Page.CHAT })
                     Page.SETTINGS -> SettingsPage(theme, developer, reduceMotion, onTheme, onDeveloper, onReduceMotion, limits, onLimits, runtimeState, state.metrics)
@@ -152,6 +157,23 @@ fun TaviApp(
         } },
         confirmButton = { TextButton(onClick = { model.approveTool(approval.id, true) }) { Text("Allow once") } },
         dismissButton = { TextButton(onClick = { model.approveTool(approval.id, false) }) { Text("Decline") } },
+    ) }
+    incoming?.let { share -> AlertDialog(
+        onDismissRequest = { if (!state.isHistoryBusy) onDismissShare(share.id) },
+        title = { Text(if (share.error != null) "Unsupported share" else "Bring this into Tavi?") },
+        text = { Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            if (share.error != null) Text(share.error)
+            else {
+                if (share.image != null) Text("One photo · copied privately only after import. A VL or Omni pack is needed to ask about it.")
+                if (share.text.isNotBlank()) SelectionContainer { Text(share.text, style = MaterialTheme.typography.bodyMedium) }
+                Text("Import creates a new draft. Your current conversation/draft stays saved. No URL is fetched, model loaded or message sent automatically.", style = MaterialTheme.typography.bodySmall)
+                state.shareImportError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+            }
+            if (state.isHistoryBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
+        } },
+        confirmButton = { if (share.error == null) TextButton(enabled = !state.isHistoryBusy && !state.isImporting && !state.isRecording && !state.isGenerating,
+            onClick = { model.acceptSharedInput(share.id, share.text, share.image) }) { Text("Import as new draft") } },
+        dismissButton = { TextButton(enabled = !state.isHistoryBusy, onClick = { onDismissShare(share.id) }) { Text(if (share.error == null) "Cancel" else "Close") } },
     ) }
 }
 
@@ -241,7 +263,8 @@ private fun ChatPage(state: ProbeUiState, model: ProbeViewModel, developer: Bool
         AnimatedVisibility(developer, enter = fadeIn(tween(if (reduced) 0 else 150)), exit = fadeOut(tween(if (reduced) 0 else 100))) {
             DeveloperPanel(state)
         }
-        if (canChat) {
+        val mediaSupported = viewingPreview || ((!state.photoAttached || ModelCapability.PHOTO in capabilities) && (!state.audioAttached || ModelCapability.VOICE_INPUT in capabilities))
+        if (canChat || state.draft.isNotBlank() || state.photoAttached || state.audioAttached) {
             Surface(Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 12.dp), shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
                 Column(Modifier.padding(8.dp)) {
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -250,6 +273,7 @@ private fun ChatPage(state: ProbeUiState, model: ProbeViewModel, developer: Bool
                     }
                     if (state.isRecording) Text("Recording · tap microphone to finish · 30s maximum", Modifier.padding(8.dp), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                     if (state.isImporting) LinearProgressIndicator(Modifier.fillMaxWidth())
+                    if (!canChat || !mediaSupported) Text(if (state.photoAttached) "Load a VL or Omni pack to send this photo." else "Load a compatible model to send this draft.", Modifier.padding(8.dp), style = MaterialTheme.typography.bodySmall)
                     OutlinedTextField(state.draft, model::updateDraft, Modifier.fillMaxWidth(), placeholder = { Text("Ask Tavi anything…") },
                         enabled = !state.isGenerating && !state.isHistoryBusy, maxLines = 4, shape = RoundedCornerShape(18.dp),
                         colors = OutlinedTextFieldDefaults.colors(unfocusedBorderColor = Color.Transparent, focusedBorderColor = Color.Transparent))
@@ -274,10 +298,10 @@ private fun ChatPage(state: ProbeUiState, model: ProbeViewModel, developer: Bool
                             else microphone.launch(Manifest.permission.RECORD_AUDIO)
                         }, enabled = ModelCapability.VOICE_INPUT in capabilities && !state.isGenerating && !state.isImporting) { Glyph(if (state.isRecording) "stop" else "voice", description = if (state.isRecording) "Finish voice recording" else "Record voice") }
                         if (ModelCapability.VOICE_OUTPUT in capabilities) FilterChip(state.speakReplies, model::toggleSpeech, label = { Text("Speak") })
-                        Text(if (runtime.loaded) "Local · Text" else "Preview", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(if (runtime.loaded) "Local" else if (viewingPreview) "Preview" else "Draft", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Spacer(Modifier.weight(1f))
                         FilledIconButton(onClick = if (state.isGenerating) model::cancel else model::submit,
-                            enabled = !state.isHistoryBusy && runtime.phase != RuntimePhase.LOADING && !state.isRecording && !state.isImporting && (state.isGenerating || state.draft.isNotBlank() || state.photoAttached || state.audioAttached)) { Glyph(if (state.isGenerating) "stop" else "arrow", description = if (state.isGenerating) "Stop response" else "Send message") }
+                            enabled = !state.isHistoryBusy && runtime.phase != RuntimePhase.LOADING && !state.isRecording && !state.isImporting && (state.isGenerating || (canChat && mediaSupported && (state.draft.isNotBlank() || state.photoAttached || state.audioAttached)))) { Glyph(if (state.isGenerating) "stop" else "arrow", description = if (state.isGenerating) "Stop response" else "Send message") }
                     }
                 }
             }

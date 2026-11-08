@@ -53,6 +53,7 @@ class ProbeViewModel(
     private var searchJob: Job? = null
     private var draftJob: Job? = null
     private var cancellationSave: Job? = null
+    private var persistedId: String? = null
     private val archive = if (repository != null && mediaStore != null) ConversationArchive(repository, mediaStore) else null
 
     init {
@@ -76,8 +77,13 @@ class ProbeViewModel(
         persistence.withLock {
             val state = _state.value
             if (state.isHistoryBusy && !force) return@withLock
-            if (state.turns.isNotEmpty() || state.draft.isNotBlank()) store.save(SavedConversation(state.conversationId,
-                state.conversationTitle, state.turns, state.realInference, state.engineName, state.draft, state.speakReplies))
+            if (persistedId == state.conversationId || state.turns.isNotEmpty() || state.draft.isNotBlank() || state.photoReference != null || state.audioReference != null) {
+                val draftMedia = listOfNotNull(state.photoReference?.let { RequestPart.Image(it) },
+                    state.audioReference?.let { RequestPart.Audio(it, state.audioDurationMs) })
+                store.save(SavedConversation(state.conversationId, state.conversationTitle, state.turns, state.realInference,
+                    state.engineName, state.draft, state.speakReplies, draftMedia))
+                persistedId = state.conversationId
+            }
         }
     }
     private suspend fun refreshLibrary(append: Boolean = false) {
@@ -91,7 +97,12 @@ class ProbeViewModel(
         completedTurns.addAll(saved.turns.filterIsInstance<ProbeTurn.Assistant>().filter { it.status == ReplyStatus.COMPLETE }.map { it.id })
         nextTurnId = (saved.turns.maxOfOrNull { it.id } ?: 0) + 1
         val count = repository.count(id)
+        persistedId = id
+        val image = saved.draftMedia.filterIsInstance<RequestPart.Image>().singleOrNull()
+        val audio = saved.draftMedia.filterIsInstance<RequestPart.Audio>().singleOrNull()
         _state.update { it.copy(conversationId = id, conversationTitle = saved.title, turns = saved.turns, draft = saved.draft,
+            photoReference = image?.privateReference, photoAttached = image != null, audioReference = audio?.privateReference,
+            audioAttached = audio != null, audioDurationMs = audio?.durationMs ?: 0,
             realInference = saved.real, engineName = saved.engine, speakReplies = saved.speak, totalTurns = count,
             error = if (saved.turns.any { turn -> turn is ProbeTurn.Assistant && turn.status == ReplyStatus.INTERRUPTED }) "An earlier response was interrupted. It was not replayed." else null,
             metrics = GenerationMetrics(), trace = emptyList()) }
@@ -136,12 +147,33 @@ class ProbeViewModel(
         _state.update { it.copy(isHistoryBusy = true) }
         historyJob = viewModelScope.launch {
             try { if (stop) { precedingGeneration?.join(); cancellationSave?.join(); recording?.join() }; block() }
+            catch (error: CancellationException) { throw error }
             catch (_: Exception) { reportError("History operation failed. Check storage or the archive and retry; existing conversations were retained.") }
             finally { _state.update { it.copy(isHistoryBusy = false) } }
         }
     }
 
     fun reportError(message: String) = _state.update { it.copy(error = message) }
+    /** User-confirmed import only. Save the previous chat first and never call submit here. */
+    fun acceptSharedInput(id: String, text: String, image: Uri?) {
+        if (_state.value.isHistoryBusy || _state.value.isImporting || _state.value.isRecording || _state.value.isGenerating) return
+        if (text.length > 8000 || (text.isBlank() && image == null) || (image != null && image.scheme != "content")) { reportError("Shared input is empty, too long or unsupported."); return }
+        _state.update { it.copy(error = null, shareImportError = null) }
+        historyAction(stop = true) {
+            try {
+                checkpoint(true)
+                val reference = image?.let { checkNotNull(mediaStore).importPhoto(it) }
+                resetChat()
+                _state.update { it.copy(draft = text, photoReference = reference, photoAttached = reference != null,
+                    conversationTitle = text.trim().take(80).ifBlank { "Shared photo" }) }
+                checkpoint(true)
+                refreshLibrary()
+                _state.update { it.copy(acceptedShareId = id) }
+            } catch (error: CancellationException) { throw error }
+            catch (_: Exception) { _state.update { it.copy(shareImportError = "Could not import or save this share. Existing conversations were retained. Check storage/access and share it again.") } }
+        }
+    }
+    fun consumeAcceptedShare(id: String) { _state.update { if (it.acceptedShareId == id) it.copy(acceptedShareId = null) else it } }
     fun reviewLastQuestion() {
         val state = _state.value
         if (state.isGenerating || state.isHistoryBusy || state.isRecording || state.isImporting) return
@@ -152,6 +184,7 @@ class ProbeViewModel(
         _state.update { it.copy(draft = user.text, photoAttached = images.isNotEmpty(), photoReference = images.firstOrNull()?.privateReference,
             audioAttached = audio.isNotEmpty(), audioReference = audio.firstOrNull()?.privateReference, audioDurationMs = audio.firstOrNull()?.durationMs ?: 0,
             error = "Question restored to the composer. Review it, then press Send when ready.") }
+        saveDraftSoon()
     }
     fun importPhoto(uri: Uri) {
         if (_state.value.isGenerating || _state.value.isImporting || _state.value.isHistoryBusy) return
@@ -160,15 +193,15 @@ class ProbeViewModel(
         importing = viewModelScope.launch {
             try {
                 val reference = checkNotNull(mediaStore).importPhoto(uri)
-                if (epoch == chatEpoch) _state.update { it.copy(photoAttached = true, photoReference = reference) }
+                if (epoch == chatEpoch) { _state.update { it.copy(photoAttached = true, photoReference = reference) }; checkpoint() }
             } catch (_: CancellationException) { /* A new chat invalidates the import. */ }
             catch (_: Exception) { if (epoch == chatEpoch) reportError("Unable to import photo. Use a supported image under 20 MB.") }
             finally { if (epoch == chatEpoch) _state.update { it.copy(isImporting = false) } }
         }
     }
-    fun clearPhoto() = _state.update { it.copy(photoAttached = false, photoReference = null) }
-    fun clearAudio() = _state.update { it.copy(audioAttached = false, audioReference = null, audioDurationMs = 0) }
-    fun toggleSpeech() = _state.update { it.copy(speakReplies = !it.speakReplies) }
+    fun clearPhoto() { _state.update { it.copy(photoAttached = false, photoReference = null) }; saveDraftSoon() }
+    fun clearAudio() { _state.update { it.copy(audioAttached = false, audioReference = null, audioDurationMs = 0) }; saveDraftSoon() }
+    fun toggleSpeech() { _state.update { it.copy(speakReplies = !it.speakReplies) }; saveDraftSoon() }
     fun startRecording() {
         if (_state.value.isRecording || _state.value.isGenerating || _state.value.isHistoryBusy || recording?.isActive == true) return
         val capture = recorder ?: return
@@ -178,6 +211,7 @@ class ProbeViewModel(
             try {
                 val (reference, duration) = capture.record()
                 _state.update { it.copy(audioAttached = true, audioReference = reference, audioDurationMs = duration, speakReplies = true) }
+                checkpoint()
             } catch (_: CancellationException) { /* Background/cancel discards the capture. */ }
             catch (_: Exception) { reportError("Microphone capture failed or was too short. Check permission and retry.") }
             finally { _state.update { it.copy(isRecording = false) } }
@@ -192,6 +226,7 @@ class ProbeViewModel(
         resetChat()
     }
     private fun resetChat() {
+        persistedId = null
         ++chatEpoch
         importing?.cancel()
         cancel()
@@ -204,6 +239,9 @@ class ProbeViewModel(
     fun updateDraft(value: String) {
         if (_state.value.isHistoryBusy) return
         _state.update { it.copy(draft = value.take(8_000)) }
+        saveDraftSoon()
+    }
+    private fun saveDraftSoon() {
         if (repository != null) {
             draftJob?.cancel()
             draftJob = viewModelScope.launch { delay(500); runCatching { checkpoint() }.onFailure { reportError("Unable to save draft. Check free storage.") } }
@@ -372,6 +410,8 @@ data class ProbeUiState(
     val isImporting: Boolean = false,
     val speakReplies: Boolean = false,
     val toolProgress: ToolProgress = ToolProgress(),
+    val acceptedShareId: String? = null,
+    val shareImportError: String? = null,
 )
 
 data class GenerationMetrics(val outputTokens: Int? = null, val decodeNanos: Long? = null, val firstTextMs: Long? = null) {
