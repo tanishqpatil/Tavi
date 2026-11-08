@@ -5,6 +5,7 @@ import android.os.Bundle
 import app.lfm3.probe.history.ConversationRepository
 import app.lfm3.probe.models.ModelPack
 import app.lfm3.probe.models.ModelCapability
+import app.lfm3.probe.models.ModelRuntime
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -51,10 +52,10 @@ internal object InferenceWire {
         return InferenceRequest(json.getLong("turn"), listOf(RequestPart.Text(last.text)) + last.media,
             messages.dropLast(1), ticket, output, json.getBoolean("speak"), system, json.optBoolean("routing"))
     }
-    fun descriptor(pack: ModelPack, backend: RuntimeBackend = RuntimeBackend.CPU) = EngineDescriptor("llama.cpp v0.8.0 · ${pack.title} · ${backend.label}", pack.capabilities.map { when (it) {
+    fun descriptor(pack: ModelPack, backend: RuntimeBackend = RuntimeBackend.CPU) = EngineDescriptor("${if (pack.runtime == ModelRuntime.LITERT) "LiteRT 2.3.0" else "llama.cpp v0.8.0"} · ${pack.title} · ${backend.label}", pack.capabilities.map { when (it) {
         ModelCapability.TEXT -> Capability.TEXT; ModelCapability.PHOTO -> Capability.IMAGE
         ModelCapability.VOICE_INPUT -> Capability.AUDIO_INPUT; ModelCapability.VOICE_OUTPUT -> Capability.AUDIO_OUTPUT
-    } }.toSet(), EngineKind.LLAMA_CPP)
+    } }.toSet(), if (pack.runtime == ModelRuntime.LITERT) EngineKind.LITERT else EngineKind.LLAMA_CPP)
     fun data(id: Long, kind: String) = Bundle().apply { putLong("id", id); putString("kind", kind) }
 }
 

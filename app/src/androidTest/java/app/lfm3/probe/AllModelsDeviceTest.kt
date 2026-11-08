@@ -219,6 +219,20 @@ class AllModelsDeviceTest {
                 val reply = ask(result, listOf(RequestPart.Text("What is 2 plus 2? Answer briefly.")))
                 assertTrue(Regex("(?i)\\b(4|four)\\b").containsMatchIn(reply.body))
             }
+            if (pack.runtime == ModelRuntime.LITERT) testCase("invalid_profile_cleanup_and_reload") { result ->
+                engine.unload(); loaded = false
+                PackLease.acquire(root, pack, shared = false).use { }
+                for ((tokens, backend) in listOf(8192 to RuntimeBackend.CPU, 1024 to RuntimeBackend.OPENCL)) {
+                    try { engine.load(pack, tokens, cpu, backend); fail("Unsupported LiteRT profile loaded") }
+                    catch (expected: IllegalStateException) { assertTrue(expected.message.orEmpty().contains("LiteRT")) }
+                    assertFalse(engine.loaded)
+                    PackLease.acquire(root, pack, shared = false).use { }
+                }
+                engine.load(pack, contextTokens, cpu); loaded = true
+                assertEquals(EngineKind.LITERT, engine.descriptor.kind)
+                val reply = ask(result, listOf(RequestPart.Text("What is 2 plus 2? Answer briefly.")))
+                assertTrue(Regex("(?i)\\b(4|four)\\b").containsMatchIn(reply.body))
+            }
         } catch (error: Exception) {
             report.put("fatal", error.javaClass.simpleName).put("reason", error.message?.take(240)?.takeIf { '/' !in it } ?: "Setup failed")
         } finally {

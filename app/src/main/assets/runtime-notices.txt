@@ -17,3 +17,20 @@ The loader is used only for linking; libOpenCL.so is excluded from the APK.
 Applicable license texts are opencl-headers-LICENSE.txt and opencl-loader-LICENSE.txt.
 The device vendor supplies the actual driver. Availability does not establish
 model correctness, acceleration coverage or improved performance.
+
+Experimental LiteRT CPU adapter:
+SDK com.google.ai.edge.litert:litert:2.3.0 (Apache-2.0).
+Core tokenizer, language-model runner, graph/speech orchestration and bicubic
+resize adapted from Google AI Edge's Apache-2.0 photo_voice_chat Kotlin sample,
+Copyright 2026 The Google AI Edge Authors.
+https://github.com/google-ai-edge/litert-samples/tree/163222b0a76d2e80f959c1fc1f1918420e3b1e4d/samples/litert/photo_voice_chat/kotlin_cpu_gpu
+Tavi changes: CPU-only placement, explicit session/buffer/environment ownership,
+partial-load cleanup, bounded context/prefill/audio, cancellation, verified private
+graph extraction, no external model lookup or automatic accelerator fallback.
+litert-bundle-sections.json and litert-codec-window.bin are pinned sample assets;
+the 5120-byte window is a DSP constant, not learned model weights or recorded audio.
+Window SHA-256: 2eec6e903417baa1c6befe141e0c0bb52e8480530f3ab0d0940a413de2904188.
+The Apache-2.0 license is included as kleidiai-Apache-2.0.txt.
+Model weights are downloaded separately from the pinned litert-community
+conversion under its model license; they are not bundled or LiquidAI-published
+conversion artifacts. No NPU runtime or LiteRT GPU plugin is included.

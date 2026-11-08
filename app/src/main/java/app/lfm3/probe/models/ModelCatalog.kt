@@ -9,8 +9,12 @@ data class ModelPack(
     val weights: VerifiedArtifact,
     val projector: VerifiedArtifact?,
     val license: VerifiedArtifact,
+    val runtime: ModelRuntime = ModelRuntime.GGUF,
+    val additionalArtifacts: List<VerifiedArtifact> = emptyList(),
+    /** Space reserved for extracted graphs and packed weights, in addition to the download. */
+    val workingBytes: Long = 0,
 ) {
-    val artifacts get() = listOfNotNull(weights, projector, license)
+    val artifacts get() = listOfNotNull(weights, projector, license) + additionalArtifacts
     val bytes get() = artifacts.sumOf { it.bytes }
     val directory get() = "${if (id == "lfm3-text") "text" else id}-$revision"
     /** A resumed job cannot silently adopt different quantization/components at the same revision. */
@@ -19,8 +23,9 @@ data class ModelPack(
         java.security.MessageDigest.getInstance("SHA-256").digest(manifest.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
     }
     val licensePage get() = license.url.replace("/resolve/", "/blob/")
-    val experimental get() = projector != null
+    val experimental get() = projector != null || runtime == ModelRuntime.LITERT
 }
+enum class ModelRuntime { GGUF, LITERT }
 enum class ModelCapability { TEXT, PHOTO, VOICE_INPUT, VOICE_OUTPUT }
 
 object ModelCatalog {
@@ -38,7 +43,7 @@ object ModelCatalog {
             VerifiedArtifact("LFM3-Omni-2B-Q4_K_M.gguf", 1099630080L, "9f8d30e9d4fd7a9349d586e077988229b3ca0a0e4ad730897563d1eccc9893e2", "https://huggingface.co/LiquidAI/LFM3-Omni-2B-GGUF/resolve/d508b88f08a5b4286f2d2805a6a8d69a0ff44c72/LFM3-Omni-2B-Q4_K_M.gguf"),
             VerifiedArtifact("mmproj-LFM3-Omni-2B-Q8_0.gguf", 506842528L, "8a25f9d1931244429de404fccacfb7fb933970a36aa5688d2f5069f29c6b27b1", "https://huggingface.co/LiquidAI/LFM3-Omni-2B-GGUF/resolve/d508b88f08a5b4286f2d2805a6a8d69a0ff44c72/mmproj-LFM3-Omni-2B-Q8_0.gguf"),
             VerifiedArtifact("LICENSE", 10574L, "4d28ca14dedc0b3d0fcc2b3339f0e79931faa33874f3d24f522183a8fc70068c", "https://huggingface.co/LiquidAI/LFM3-Omni-2B-GGUF/resolve/d508b88f08a5b4286f2d2805a6a8d69a0ff44c72/LICENSE")),
-    )
+    ) + if (app.lfm3.probe.BuildConfig.LITERT_EXPERIMENTAL) listOf(LiteRtPack.pack) else emptyList()
     val text get() = packs.first()
     fun get(id: String) = packs.first { it.id == id }
 }

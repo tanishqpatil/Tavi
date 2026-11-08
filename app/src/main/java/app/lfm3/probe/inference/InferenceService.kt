@@ -7,13 +7,14 @@ import app.lfm3.probe.media.MediaStore
 import app.lfm3.probe.models.ModelCatalog
 import app.lfm3.probe.models.PackInstaller
 import app.lfm3.probe.models.PackLease
+import app.lfm3.probe.models.ModelRuntime
 import kotlinx.coroutines.*
 import java.io.File
 
 /** Crash boundary: this is the only production process that loads the JNI library or model. */
 class InferenceService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val engine by lazy { LlamaEngine(MediaStore(this)) }
+    @Volatile private var engine: RuntimeSession? = null
     @Volatile private var initialized = false
     private var lease: PackLease? = null
     private var active: Job? = null
@@ -30,7 +31,7 @@ class InferenceService : Service() {
     private val messenger = Messenger(handler)
     override fun onBind(intent: Intent): IBinder = messenger.binder
     private fun cancelActive() {
-        if (initialized) engine.cancel()
+        engine?.cancel()
         active?.cancel(); acknowledgement?.second?.cancel()
     }
     private fun command(message: Message) {
@@ -50,7 +51,7 @@ class InferenceService : Service() {
                     }
                     "load" -> {
                         check(initialized) { "Runtime is not initialized." }
-                        check(!engine.loaded) { "Unload the active model before loading another pack." }
+                        check(engine == null) { "Unload the active model before loading another pack." }
                         val pack = ModelCatalog.get(checkNotNull(args.getString("pack")))
                         val context = args.getInt("context"); require(context in GenerationLimits.contexts)
                         val cpu = CpuOptions(args.getInt("cpuThreads", 4), args.getInt("prefillThreads", 4), args.getInt("prefillBatch", 128))
@@ -61,17 +62,30 @@ class InferenceService : Service() {
                         try {
                             check(installer.verifyInstalled()) { "Model pack failed verification. Remove and download it again." }
                             ensureActive()
-                            engine.load(File(installer.installed, pack.weights.name).path, context,
-                                pack.projector?.let { File(installer.installed, it.name).path }.orEmpty(), pack, cpu, backend)
-                        } catch (error: Exception) { lease?.close(); lease = null; throw error }
+                            val candidate: RuntimeSession = when (pack.runtime) {
+                                ModelRuntime.GGUF -> LlamaEngine(MediaStore(this@InferenceService))
+                                ModelRuntime.LITERT -> LiteRtEngineProvider.create(this@InferenceService)
+                            }
+                            engine = candidate
+                            candidate.load(pack, installer.installed, context, cpu, backend)
+                            ensureActive()
+                        } catch (error: Throwable) {
+                            // Cancellation can arrive after mappings were created. Close them before releasing the lease.
+                            withContext(NonCancellable) { engine?.dispose(); engine = null; lease?.close(); lease = null }
+                            throw error
+                        }
                         terminal = InferenceWire.data(id, "ok")
                     }
                     "opencl" -> {
-                        check(initialized && !engine.loaded) { "Unload the model before checking OpenCL." }
+                        check(initialized && engine == null) { "Unload the model before checking OpenCL." }
                         terminal = InferenceWire.data(id, "ok").apply { putBoolean("available", NativeLlama.openclAvailable()) }
                     }
-                    "unload" -> { if (initialized) engine.unload(); lease?.close(); lease = null; terminal = InferenceWire.data(id, "ok") }
+                    "unload" -> {
+                        withContext(NonCancellable) { engine?.dispose(); engine = null; lease?.close(); lease = null }
+                        terminal = InferenceWire.data(id, "ok")
+                    }
                     "generate" -> {
+                        val engine = checkNotNull(engine) { "Load a model before sending a message." }
                         check(engine.loaded) { "Load a model before sending a message." }
                         val file = InferenceWire.requestFile(this@InferenceService, checkNotNull(args.getString("file")))
                         val request = try { ensureActive(); InferenceWire.decode(file, engine.prepare()) } finally { file.delete() }

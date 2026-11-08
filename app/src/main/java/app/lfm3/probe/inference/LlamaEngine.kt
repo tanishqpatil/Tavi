@@ -16,9 +16,9 @@ import app.lfm3.probe.models.ModelCatalog
 import app.lfm3.probe.models.ModelCapability
 
 /** Owns the one native session. Loading, unloading and generation cannot overlap. */
-class LlamaEngine(private val mediaStore: MediaStore? = null) : InferenceEngine {
+internal class LlamaEngine(private val mediaStore: MediaStore? = null) : RuntimeSession {
     private val mutex = Mutex()
-    @Volatile var loaded = false
+    @Volatile override var loaded = false
         private set
     @Volatile var generating = false
         private set
@@ -28,6 +28,10 @@ class LlamaEngine(private val mediaStore: MediaStore? = null) : InferenceEngine 
     override val descriptor get() = InferenceWire.descriptor(pack, backend)
     override fun prepare() = NativeLlama.prepare()
     override fun cancel() { NativeLlama.cancel(); playback.interrupt() }
+
+    override suspend fun load(pack: ModelPack, directory: java.io.File, context: Int, cpu: CpuOptions, backend: RuntimeBackend) =
+        load(java.io.File(directory, pack.weights.name).path, context,
+            pack.projector?.let { java.io.File(directory, it.name).path }.orEmpty(), pack, cpu, backend)
 
     suspend fun load(path: String, contextTokens: Int = 1024, projector: String = "", modelPack: ModelPack = ModelCatalog.text, cpu: CpuOptions = CpuOptions(), execution: RuntimeBackend = RuntimeBackend.CPU) = withContext(Dispatchers.IO) {
         mutex.withLock {
@@ -45,7 +49,7 @@ class LlamaEngine(private val mediaStore: MediaStore? = null) : InferenceEngine 
         }
     }
 
-    suspend fun unload() = withContext(Dispatchers.IO) {
+    override suspend fun unload() = withContext(Dispatchers.IO) {
         mutex.withLock { NativeLlama.unload(); loaded = false }
     }
 

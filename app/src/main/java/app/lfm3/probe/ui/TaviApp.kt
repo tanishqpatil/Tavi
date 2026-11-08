@@ -421,7 +421,9 @@ private fun ModelsPage(runtime: RuntimeState, generating: Boolean, select: (Stri
     val notifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { download() }
     if (consent) AlertDialog(onDismissRequest = { consent = false }, title = { Text("Download ${selected.title}?") },
         text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("${selected.bytes / 1_000_000} MB · Q4_K_M weights${if (selected.projector != null) " + matching Q8_0 component" else ""}\nLFM Open License v1.0\n\nDownloads continue in the background with progress and Pause controls. All components must verify before loading.")
+            Text("${selected.bytes / 1_000_000} MB · ${if (selected.workingBytes > 0) "community INT8 conversion + F32 media graphs" else "Q4_K_M weights"}${if (selected.projector != null) " + matching Q8_0 component" else ""}\nLFM Open License v1.0\n\nDownloads continue in the background with progress and Pause controls. All components must verify before loading.")
+            if (selected.workingBytes > 0) Text("Reserve about ${(selected.bytes + selected.workingBytes) / 1_000_000_000} GB free before downloading: extracted graphs and packed caches need additional space. CPU prototype; fixed 4096 context allocation. Smaller context settings limit conversation size, not that allocation.", style = MaterialTheme.typography.bodySmall)
+            if (selected.workingBytes > 0) Text("Unqualified lab prototype. The ARM64 emulator failed during SDK graph creation; an inconsistent SME CPU profile is now rejected. Phone inference is not yet verified.", color = MaterialTheme.colorScheme.error)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(runtime.unmeteredDownloads, unmetered)
                 Text("Unmetered networks only", style = MaterialTheme.typography.bodyMedium)
@@ -438,7 +440,7 @@ private fun ModelsPage(runtime: RuntimeState, generating: Boolean, select: (Stri
         }) { Text("Accept & download") } },
         dismissButton = { TextButton(onClick = { consent = false }) { Text("Cancel") } })
     if (removal) AlertDialog(onDismissRequest = { removal = false }, title = { Text("Remove ${selected.title}?") },
-        text = { Text("Removes this pack and its partial files. You can download it again.") },
+        text = { Text("Removes this pack, its partial files and derived runtime caches. You can download it again.") },
         confirmButton = { TextButton(onClick = { removal = false; remove() }) { Text("Remove") } },
         dismissButton = { TextButton(onClick = { removal = false }) { Text("Keep") } })
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
@@ -462,6 +464,7 @@ private fun ModelsPage(runtime: RuntimeState, generating: Boolean, select: (Stri
                         ModelCapability.TEXT -> "Text"; ModelCapability.PHOTO -> "Photo"; ModelCapability.VOICE_INPUT -> "Voice in"; ModelCapability.VOICE_OUTPUT -> "Speech out"
                     } }}", style = MaterialTheme.typography.bodySmall)
                     Text(if (pack.experimental) "Experimental phone-test integration" else "Text path emulator-tested", style = MaterialTheme.typography.labelMedium)
+                    if (pack.workingBytes > 0) Text("LiteRT CPU prototype · community conversion · about 11 GB initial free storage · context ≤4096", style = MaterialTheme.typography.bodySmall)
                     if (!chosen) {
                         Text(if (pack.id in runtime.installedIds) "Verified & installed" else "Not installed", style = MaterialTheme.typography.bodySmall)
                         OutlinedButton(onClick = { select(pack.id) }, enabled = !runtime.busy && !runtime.loaded && !generating) { Text("Select pack") }

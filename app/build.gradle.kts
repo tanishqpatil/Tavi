@@ -3,6 +3,11 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// The prototype stays outside the portable APK until its real-model qualification passes.
+val liteRtLab = providers.gradleProperty("taviLiteRt").orElse("false").get().also {
+    require(it in setOf("true", "false"))
+}.toBoolean()
+
 android {
     namespace = "app.lfm3.probe"
     compileSdk = 36
@@ -23,6 +28,7 @@ android {
         val opencl = providers.gradleProperty("taviOpenCl").orElse("false").get().also { require(it in setOf("true", "false")) }.toBoolean()
         buildConfigField("boolean", "CPU_KLEIDIAI_COMPILED", kleidi.toString())
         buildConfigField("boolean", "OPENCL_COMPILED", opencl.toString())
+        buildConfigField("boolean", "LITERT_EXPERIMENTAL", liteRtLab.toString())
         externalNativeBuild { cmake { arguments += listOf("-DCMAKE_BUILD_TYPE=Release", "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON", "-DTAVI_KLEIDIAI=${if (kleidi) "ON" else "OFF"}", "-DTAVI_OPENCL=${if (opencl) "ON" else "OFF"}") } }
         if (opencl) externalNativeBuild { cmake { arguments += "-DANDROID_STL=c++_shared" } }
     }
@@ -31,6 +37,11 @@ android {
         compose = true
         buildConfig = true
     }
+    sourceSets.named("main") {
+        kotlin.srcDir(if (liteRtLab) "src/litert/java" else "src/portable/java")
+    }
+    if (liteRtLab) sourceSets.named("test") { kotlin.srcDir("src/litertTest/java") }
+    if (liteRtLab) sourceSets.named("androidTest") { kotlin.srcDir("src/litertAndroidTest/java") }
     // Release credentials enter only through the build environment. Never store passwords in Gradle properties.
     val releaseStore = providers.environmentVariable("TAVI_SIGNING_KEYSTORE").orNull
     if (releaseStore != null) signingConfigs.create("release") {
@@ -57,6 +68,7 @@ android {
 }
 
 dependencies {
+    if (liteRtLab) implementation("com.google.ai.edge.litert:litert:2.3.0")
     // API 36 is the highest installed SDK in this workspace. Keep this probe buildable
     // with the matching Compose generation; revisit after the P1 SDK/device inventory.
     val composeBom = platform("androidx.compose:compose-bom:2026.05.00")

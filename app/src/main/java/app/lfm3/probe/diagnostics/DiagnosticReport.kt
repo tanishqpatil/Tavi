@@ -50,6 +50,7 @@ object DiagnosticReport {
                 .put("loaded_pack", pack(runtime.loadedId)).put("loaded_context_tokens", runtime.loadedContext)
                 .put("cpu_kernels_compiled", BuildConfig.CPU_KLEIDIAI_COMPILED)
                 .put("opencl_compiled", BuildConfig.OPENCL_COMPILED).put("loaded_backend", runtime.loadedBackend?.name ?: "none")
+                .put("litert_lab_compiled", BuildConfig.LITERT_EXPERIMENTAL)
                 .put("loaded_cpu_threads", runtime.loadedCpu?.threads ?: JSONObject.NULL)
                 .put("loaded_prefill_threads", runtime.loadedCpu?.prefillThreads ?: JSONObject.NULL)
                 .put("loaded_prefill_batch", runtime.loadedCpu?.batch ?: JSONObject.NULL)

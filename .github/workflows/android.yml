@@ -15,8 +15,12 @@ concurrency:
 
 jobs:
   build:
-    name: Test and build ARM64 APK
+    name: Test and build ${{ matrix.runtime }} ARM64 APK
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [portable, litert-lab]
     timeout-minutes: 60
     env:
       CMAKE_BUILD_PARALLEL_LEVEL: 2
@@ -54,6 +58,7 @@ jobs:
       - name: Run JVM tests, lint and native APK builds
         run: >-
           ./gradlew --no-daemon --stacktrace --max-workers=2
+          -PtaviLiteRt=${{ matrix.runtime == 'litert-lab' }}
           :app:testDebugUnitTest :app:lintDebug
           :app:assembleDebug :app:assembleDebugAndroidTest
 
@@ -66,7 +71,7 @@ jobs:
           "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -P 16 -v 4 "$apk"
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$apk"
           short_sha="${GITHUB_SHA:0:12}"
-          artifact_name="Tavi-arm64-debug-${GITHUB_RUN_NUMBER}-${short_sha}"
+          artifact_name="Tavi-${{ matrix.runtime }}-arm64-debug-${GITHUB_RUN_NUMBER}-${short_sha}"
           mkdir -p dist
           cp "$apk" "dist/${artifact_name}.apk"
           (
@@ -76,6 +81,7 @@ jobs:
           {
             echo "Tavi development build (ARM64, Android 8+)"
             echo "Commit: $GITHUB_SHA"
+            echo "Runtime build: ${{ matrix.runtime }}"
             echo "Native runtime: $(git -C native/llama.cpp rev-parse HEAD)"
             echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             echo "No model weights included. Download a pack inside the app."
@@ -99,7 +105,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: checks-${{ github.run_number }}-${{ github.run_attempt }}
+          name: checks-${{ matrix.runtime }}-${{ github.run_number }}-${{ github.run_attempt }}
           path: |
             app/build/reports/tests/
             app/build/reports/lint-results-debug.*

@@ -26,7 +26,7 @@ class PackInstaller(private val root: File, private val log: (String) -> Unit = 
     private suspend fun installLocked(progress: (Long, Long) -> Unit) {
         root.mkdirs(); staging.mkdirs()
         val remaining = pack.artifacts.sumOf { (it.bytes - File(staging, it.name).length()).coerceAtLeast(0) }
-        check(root.usableSpace >= remaining + 64L * 1024 * 1024) { "Not enough free storage for this model." }
+        check(root.usableSpace >= remaining + pack.workingBytes + 64L * 1024 * 1024) { "Not enough free storage for this model and its runtime caches." }
         var completedBytes = 0L
         for (artifact in pack.artifacts) {
             currentCoroutineContext().ensureActive()

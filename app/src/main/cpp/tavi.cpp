@@ -13,6 +13,8 @@
 #include <algorithm>
 #include <cstring>
 #include <cstdlib>
+#include <sys/auxv.h>
+#include <asm/hwcap.h>
 
 namespace {
 std::atomic<bool> cancelled{false};
@@ -96,6 +98,11 @@ extern "C" JNIEXPORT jboolean JNICALL Java_app_lfm3_probe_inference_NativeLlama_
     if (session) return false;
     try { auto reg = opencl_registry(); return reg && ggml_backend_reg_dev_count(reg) > 0; }
     catch (...) { return false; }
+}
+extern "C" JNIEXPORT jboolean JNICALL Java_app_lfm3_probe_inference_NativeLlama_liteRtCpuCompatible(JNIEnv *, jobject) {
+    // An observed ARM64 emulator advertised SME2 without SME; LiteRT 2.3.0 executed RDSVL and SIGILL'd.
+    const auto features = getauxval(AT_HWCAP2);
+    return !(features & HWCAP2_SME2) || (features & HWCAP2_SME);
 }
 extern "C" JNIEXPORT void JNICALL Java_app_lfm3_probe_inference_NativeLlama_cancel(JNIEnv *, jobject) { ++epoch; cancelled = true; }
 extern "C" JNIEXPORT jlong JNICALL Java_app_lfm3_probe_inference_NativeLlama_prepare(JNIEnv *, jobject) { cancelled = false; return ++epoch; }

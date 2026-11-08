@@ -9,6 +9,7 @@ local.properties
 *.keystore
 *.gguf
 *.litertlm
+*.tflite
 *.part
 
 docs/

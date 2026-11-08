@@ -124,7 +124,7 @@ class RuntimeManager(context: Context) {
                 check(installer.verifyInstalled()) { "Installed pack failed verification. Remove and download again." }
                 val limits = preferences.limits
                 val cpu = preferences.cpu
-                val backend = preferences.backend
+                val backend = if (pack.runtime == ModelRuntime.LITERT) RuntimeBackend.CPU else preferences.backend
                 native.load(pack, limits.context, cpu, backend)
                 log.record("LFM3_MODEL_LOADED")
                 _state.value = _state.value.copy(phase = RuntimePhase.LOADED, loadedId = pack.id, loadedContext = limits.context, loadedCpu = cpu, loadedBackend = backend,
