@@ -101,12 +101,13 @@ jobs:
             esac
             ./gradlew --no-daemon --no-configuration-cache --stacktrace --max-workers=2 \
               -PtaviKleidiAi="$kleidi" -PtaviOpenCl="$opencl" -PtaviLiteRt="$litert" \
-              :app:testDebugUnitTest :app:lintRelease :app:assembleRelease :app:assembleDebugAndroidTest
+              :app:clean :app:testDebugUnitTest :app:lintRelease :app:assembleRelease :app:assembleDebugAndroidTest
             python3 scripts/release.py verify --apk app/build/outputs/apk/release/app-release.apk \
               --build-tools "$ANDROID_HOME/build-tools/36.0.0" --output dist --variant "$variant"
             mkdir -p "dist-checks/$variant"
             cp -R app/build/reports/tests "dist-checks/$variant/"
             cp app/build/reports/lint-results-release.* "dist-checks/$variant/"
+            cp -R app/build/test-results/testDebugUnitTest "dist-checks/$variant/xml"
           done
 
       - name: Upload verified release files

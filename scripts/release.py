@@ -83,6 +83,10 @@ def verify(apk, tools, output, variant="portable"):
         libs = {path.rsplit('/', 1)[-1] for path in archive.namelist() if path.startswith('lib/') and path.endswith('.so')}
         if ("libLiteRt.so" in libs) != (variant == "litert-lab") or ("libggml-opencl.so" in libs) != (variant == "opencl"):
             raise ValueError("APK native libraries do not match the selected runtime variant")
+        dex = [archive.read(path) for path in archive.namelist() if re.fullmatch(r'classes[0-9]*\.dex', path)]
+        for descriptor in (b'Lapp/lfm3/probe/inference/litert/LiteRtEngine;', b'Lcom/google/ai/edge/litert/CompiledModel;'):
+            if any(descriptor in data for data in dex) != (variant == "litert-lab"):
+                raise ValueError("LiteRT classes do not match the selected runtime variant")
         for path in archive.namelist():
             if not path.startswith('lib/') or not path.endswith('.so'):
                 continue
